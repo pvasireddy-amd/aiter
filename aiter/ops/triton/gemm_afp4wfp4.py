@@ -476,27 +476,29 @@ def _get_config(
     M: int,
     N: int,
     K: int,
-):
-    if not hasattr(_get_config, "_config_dict"):
+    shuffle: bool = False,
+):  
+    shuffle_filename_suffix = "" if not shuffle else "_PRESHUFFLED"
+    if not hasattr(_get_config, "_config_dict") or not hasattr(_get_config._config_dict, f"default{shuffle_filename_suffix}"):
         dev = arch_info.get_device()
         _get_config._config_dict = {}
-        fpath = f"{AITER_TRITON_CONFIGS_PATH}/gemm/{dev}-GEMM-AFP4WFP4.json"
+        fpath = f"{AITER_TRITON_CONFIGS_PATH}/gemm/{dev}-GEMM-AFP4WFP4{shuffle_filename_suffix}.json"
         with open(fpath, "r") as file:
             config = json.load(file)
-        _get_config._config_dict["default"] = config
+        _get_config._config_dict[f"default{shuffle_filename_suffix}"] = config
 
-    key = f"{N}_{K}"
+    key = f"{N}_{K}{shuffle_filename_suffix}"
     if key not in _get_config._config_dict.keys():
         dev = arch_info.get_device()
         fpath = (
-            f"{AITER_TRITON_CONFIGS_PATH}/gemm/{dev}-GEMM-AFP4WFP4-N={N}-K={2*K}.json"
+            f"{AITER_TRITON_CONFIGS_PATH}/gemm/{dev}-GEMM-AFP4WFP4{shuffle_filename_suffix}-N={N}-K={2*K}.json"
         )
         if os.path.exists(fpath):
             with open(fpath, "r") as file:
                 config = json.load(file)
                 _get_config._config_dict[key] = config
         else:
-            key = "default"  # fall back to default config
+            key = f"default{shuffle_filename_suffix}"  # fall back to default config
 
     if M < 32:
         return _get_config._config_dict[key]["small"]
@@ -681,7 +683,7 @@ def gemm_afp4wfp4_preshuffled_scales(
         y = torch.empty((M, N), dtype=dtype, device=x.device)
 
     if config is None:
-        config = _get_config(M, N, K)
+        config = _get_config(M, N, K, True)
 
     if config["NUM_KSPLIT"] > 1:
         SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT = get_splitk(
@@ -766,7 +768,7 @@ def gemm_afp4wfp4_preshuffled_scales(
             REDUCE_BLOCK_SIZE_M,
             REDUCE_BLOCK_SIZE_N,
             ACTUAL_KSPLIT,
-            config["NUM_KSPLIT"],
+            triton.next_power_of_2(config["NUM_KSPLIT"]),
         )
 
     return y

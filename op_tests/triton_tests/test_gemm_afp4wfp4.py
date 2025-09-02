@@ -9,11 +9,7 @@ from aiter.ops.triton.gemm_afp4wfp4 import (
 )
 import aiter.ops.triton.utils.arch_info as arch_info
 from aiter.ops.triton.utils.types import str_to_torch_dtype
-
-TRITON_HIP_PRESHUFFLE_SCALES = (
-    os.environ.get("TRITON_HIP_PRESHUFFLE_SCALES", "0") == "1"
-)
-
+from aiter.ops.shuffle import shuffle_weight
 
 def shuffle_scales(scales: torch.Tensor):
     scales_shuffled = scales.clone()
@@ -28,7 +24,7 @@ def shuffle_scales(scales: torch.Tensor):
 SCALE_GROUP_SIZE = 32
 
 
-def generate_gemm_afp4wfp4_inputs(M, N, K, dtype, layout="TN", output=True):
+def generate_gemm_afp4wfp4_inputs(M, N, K, dtype, layout="TN", output=True, shuffle=False):
     torch.manual_seed(5)
     if isinstance(dtype, str):
         dtype = str_to_torch_dtype[dtype]
@@ -55,7 +51,7 @@ def generate_gemm_afp4wfp4_inputs(M, N, K, dtype, layout="TN", output=True):
 
     w = w_low | w_high << 4
     # Scale of 1.0 in e8m0, bias 127.
-    if M >= 32 and TRITON_HIP_PRESHUFFLE_SCALES:
+    if M >= 32 and shuffle:
         M_pad = (M + 255) // 256 * 256
     else:
         M_pad = M
@@ -67,13 +63,18 @@ def generate_gemm_afp4wfp4_inputs(M, N, K, dtype, layout="TN", output=True):
     )
     x_scales = x_scales.T
     w_scales = w_scales.T
-    if TRITON_HIP_PRESHUFFLE_SCALES:
+    if shuffle:
         if M >= 32:
             x_scales_shuffled = shuffle_scales(x_scales)
         else:
             x_scales_shuffled = x_scales
+        
+        use_int4=False
+        weight_shuffle_layout = (16, 16)
+        w_shuffed = shuffle_weight(w, layout=weight_shuffle_layout, use_int4=use_int4).reshape(w.shape[0] // weight_shuffle_layout[0], w.shape[1] * weight_shuffle_layout[0])
         w_scales_shuffled = shuffle_scales(w_scales)
     else:
+        w_shuffed = w
         x_scales_shuffled = x_scales
         w_scales_shuffled = w_scales
 
@@ -87,6 +88,7 @@ def generate_gemm_afp4wfp4_inputs(M, N, K, dtype, layout="TN", output=True):
     return (
         x,
         w,
+        w_shuffed,
         x_scales[:M],
         w_scales,
         x_scales_shuffled,
@@ -187,11 +189,12 @@ def run_torch(x, w, x_scales, w_scales, dtype):
 @pytest.mark.parametrize("M, N, K", get_x_vals())
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("output", [True, False])
-def test_gemm_afp4_wfp4(M: int, N: int, K: int, dtype, output):
+@pytest.mark.parametrize("shuffle", [True])
+def test_gemm_afp4_wfp4(M: int, N: int, K: int, dtype, output, shuffle):
     if not (arch_info.is_fp4_avail()):
         pytest.skip("MXFP4 not supported on this architecture")
 
-    if TRITON_HIP_PRESHUFFLE_SCALES:
+    if shuffle:
         if M < 32:
             pytest.skip("Minimal tile size for preshuffling is 32x32x256")
 
@@ -204,25 +207,25 @@ def test_gemm_afp4_wfp4(M: int, N: int, K: int, dtype, output):
                 f"K = {K} is not divisible by 256, skip this test for preshuffled scales tests"
             )
 
-    x, w, x_scales, w_scales, x_scales_triton, w_scales_triton, out_dtype, y = (
-        generate_gemm_afp4wfp4_inputs(M, N, K, dtype, output=output)
+    x, w, w_triton, x_scales, w_scales, x_scales_triton, w_scales_triton, out_dtype, y = (
+        generate_gemm_afp4wfp4_inputs(M, N, K, dtype, output=output, shuffle=shuffle)
     )
 
     torch_out = run_torch(x, w, x_scales, w_scales, dtype).to(dtype)
 
-    if TRITON_HIP_PRESHUFFLE_SCALES:
+    if shuffle:
         if output:
             triton_out = gemm_afp4wfp4_preshuffled_scales(
-                x, w, x_scales_triton, w_scales_triton, dtype, y
+                x, w_triton, x_scales_triton, w_scales_triton, dtype, y
             )
         else:
             triton_out = gemm_afp4wfp4_preshuffled_scales(
-                x, w, x_scales_triton, w_scales_triton, dtype
+                x, w_triton, x_scales_triton, w_scales_triton, dtype
             )
     else:
         if output:
-            triton_out = gemm_afp4wfp4(x, w, x_scales_triton, w_scales_triton, dtype, y)
+            triton_out = gemm_afp4wfp4(x, w_triton, x_scales_triton, w_scales_triton, dtype, y)
         else:
-            triton_out = gemm_afp4wfp4(x, w, x_scales_triton, w_scales_triton, dtype)
+            triton_out = gemm_afp4wfp4(x, w_triton, x_scales_triton, w_scales_triton, dtype)
 
     torch.testing.assert_close(torch_out, triton_out)
