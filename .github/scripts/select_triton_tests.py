@@ -115,6 +115,51 @@ def list_triton_source_files() -> (
     )
 
 
+# Matching of kernel config files with JSON strings.
+# ------------------------------------------------------------------------------
+
+
+def resolve_json_string(json_string: str) -> list[str]:
+    resolved_strings = [json_string]
+    if json_string.startswith("f'") or json_string.startswith('f"'):
+        # f-string with variable interpolation.
+        # Resolve {AITER_TRITON_CONFIGS_PATH} interpolation:
+        if r"{AITER_TRITON_CONFIGS_PATH}" in json_string:
+            json_string = json_string.replace(
+                r"{AITER_TRITON_CONFIGS_PATH}",
+                str(triton_config_dir().relative_to(root_dir()).as_posix()),
+            )
+            logging.debug(
+                r"Resolved {AITER_TRITON_CONFIGS_PATH} in JSON string: [%s]",
+                json_string,
+            )
+        # Resolve {dev} interpolation:
+        if r"{dev}" in json_string:
+            resolved_strings = [
+                json_string.replace(r"{dev}", dev) for dev in {"MI300X", "MI350X"}
+            ]
+            logging.debug(r"Resolved {dev} in JSON string: %s", str(resolved_strings))
+        # Remove f-string delimiters if there's no more variable interpolation.
+        resolved_strings = [
+            s[2:-1] if not any(c in s for c in "{}") else s for s in resolved_strings
+        ]
+    return resolved_strings
+
+
+def resolve_json_strings(json_strings: list[str]) -> list[str]:
+    resolved_strings = sorted(
+        resolved_json_strings
+        for json_string in json_strings
+        for resolved_json_strings in resolve_json_string(json_string)
+    )
+    log_level = logging.DEBUG
+    if resolved_strings and logging.getLogger().isEnabledFor(log_level):
+        logging.log(log_level, "Resolved JSON strings:")
+        for resolved_string in resolved_strings:
+            logging.log(log_level, "* %s", resolved_string)
+    return resolved_strings
+
+
 # Git commands.
 # ------------------------------------------------------------------------------
 
@@ -348,10 +393,14 @@ def parse_source_file_recursively(
             continue
 
         dependencies, json_strings = parse_source_file(current)
+        json_strings = resolve_json_strings(json_strings)
 
+        # Add current node to the graph.
         current_str = str(current)
         graph.add_node(current_str)
         logging.debug("Added graph node [%s].", current_str)
+
+        # Add dependencies of current node, and respective edges, to the graph.
         for d in dependencies:
             d_str = str(d)
             graph.add_node(d_str)
