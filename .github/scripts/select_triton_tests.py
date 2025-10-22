@@ -49,56 +49,62 @@ def root_dir() -> Path:
     return check_dir(Path(__file__).parent.parent.parent)
 
 
-def list_files(root_dir: Path, dir: Path, suffix: str = "") -> set[Path]:
-    return {p.relative_to(root_dir) for p in dir.glob(f"**/*{suffix}") if p.is_file()}
+@functools.cache
+def triton_op_dir() -> Path:
+    return check_dir(root_dir() / "aiter" / "ops" / "triton")
 
 
-def list_triton_op_files(root_dir: Path, op_dir: Path) -> set[Path]:
-    files = list_files(root_dir, op_dir, suffix=".py")
+@functools.cache
+def triton_config_dir() -> Path:
+    return check_dir(triton_op_dir() / "configs")
+
+
+def list_files(dir: Path, suffix: str = "") -> set[Path]:
+    return {p.relative_to(root_dir()) for p in dir.glob(f"**/*{suffix}") if p.is_file()}
+
+
+def list_triton_op_files() -> set[Path]:
+    files = list_files(triton_op_dir(), suffix=".py")
     logging.debug("Found %d Triton operator source files.", len(files))
     return files
 
 
-def list_triton_kernel_files(root_dir: Path, kernel_dir: Path) -> set[Path]:
-    files = list_files(root_dir, kernel_dir, suffix=".py")
+def list_triton_kernel_files(kernel_dir: Path) -> set[Path]:
+    files = list_files(kernel_dir, suffix=".py")
     logging.debug("Found %d Triton kernel source files.", len(files))
     return files
 
 
-def list_triton_config_files(root_dir: Path, config_dir: Path) -> set[Path]:
-    files = list_files(root_dir, config_dir, suffix=".json")
+def list_triton_config_files() -> set[Path]:
+    files = list_files(triton_config_dir(), suffix=".json")
     logging.debug("Found %d Triton kernel config files.", len(files))
     return files
 
 
-def list_triton_test_files(root_dir: Path, test_dir: Path) -> set[Path]:
-    files = list_files(root_dir, test_dir, suffix=".py")
+def list_triton_test_files(test_dir: Path) -> set[Path]:
+    files = list_files(test_dir, suffix=".py")
     logging.debug("Found %d Triton test source files.", len(files))
     return files
 
 
-def list_triton_bench_files(root_dir: Path, bench_dir: Path) -> set[Path]:
-    # TODO: How to deal with these files?
-    #       `op_tests/op_benchmarks/triton/utils/model_configs.json`
-    #       `op_tests/op_benchmarks/triton/bench_schema.yaml`
-    files = list_files(root_dir, bench_dir, suffix=".py")
+def list_triton_bench_files(bench_dir: Path) -> set[Path]:
+    files = list_files(bench_dir, suffix=".py")
     logging.debug("Found %d Triton benchmark source files.", len(files))
     return files
 
 
-def list_triton_source_files(
-    root_dir: Path,
-) -> tuple[set[Path], list[Path], list[Path], list[Path], list[Path]]:
-    op_dir = check_dir(root_dir / "aiter" / "ops" / "triton")
-    kernels_dir = check_dir(op_dir / "_triton_kernels")
-    config_dir = check_dir(op_dir / "configs")
-    test_dir = check_dir(root_dir / "op_tests" / "triton_tests")
-    bench_dir = check_dir(root_dir / "op_tests" / "op_benchmarks" / "triton")
-    op_files = list_triton_op_files(root_dir, op_dir)
-    kernel_files = list_triton_kernel_files(root_dir, kernels_dir)
-    config_files = list_triton_config_files(root_dir, config_dir)
-    test_files = list_triton_test_files(root_dir, test_dir)
-    bench_files = list_triton_bench_files(root_dir, bench_dir)
+def list_triton_source_files() -> (
+    tuple[set[Path], list[Path], list[Path], list[Path], list[Path]]
+):
+    kernels_dir = check_dir(triton_op_dir() / "_triton_kernels")
+    op_test_dir = check_dir(root_dir() / "op_tests")
+    test_dir = check_dir(op_test_dir / "triton_tests")
+    bench_dir = check_dir(op_test_dir / "op_benchmarks" / "triton")
+    op_files = list_triton_op_files()
+    kernel_files = list_triton_kernel_files(kernels_dir)
+    config_files = list_triton_config_files()
+    test_files = list_triton_test_files(test_dir)
+    bench_files = list_triton_bench_files(bench_dir)
     all_files = op_files | kernel_files | config_files | test_files | bench_files
     return (
         all_files,
@@ -222,8 +228,7 @@ class Visitor(ast.NodeVisitor):
             for suffix in cls.json_string_suffixes_to_ignore
         )
 
-    def __init__(self, root_dir: Path, source_file: Path) -> None:
-        self.root_dir: Path = root_dir
+    def __init__(self, source_file: Path) -> None:
         # Remove extension from source file, and split directories into module parts.
         self.source_file: Path = source_file
         self.source_module_parts: tuple[str, ...] = self.source_file.with_suffix(
@@ -236,20 +241,20 @@ class Visitor(ast.NodeVisitor):
         if not import_ or not self.__class__.is_import_of_interest(import_):
             return
         import_py_file = import_.replace(".", os.sep) + ".py"
-        p = self.root_dir / import_py_file
+        p = root_dir() / import_py_file
         if p.exists() and p.is_file():
             # Add dependency as Python module / source file, imported with project scope.
-            self.dependencies.add(p.relative_to(self.root_dir))
+            self.dependencies.add(p.relative_to(root_dir()))
             return
-        p = (self.root_dir / import_py_file).with_suffix("")
+        p = (root_dir() / import_py_file).with_suffix("")
         if p.exists() and p.is_dir():
             # Add dependency as Python package / directory.
-            self.dependencies.add(p.relative_to(self.root_dir))
+            self.dependencies.add(p.relative_to(root_dir()))
             return
-        p = self.root_dir / self.source_file.parent / import_py_file
+        p = root_dir() / self.source_file.parent / import_py_file
         if p.exists() and p.is_file():
             # Add dependency as Python module / source file, imported with local package scope.
-            self.dependencies.add(p.relative_to(self.root_dir))
+            self.dependencies.add(p.relative_to(root_dir()))
             return
         logging.warning(
             "Unable to find [%s] dependency of [%s] on filesystem.",
@@ -301,17 +306,15 @@ class Visitor(ast.NodeVisitor):
             self.add_json_string(f"f{joined!r}")
 
 
-def parse_source_file(
-    root_dir: Path, source_file: Path
-) -> tuple[list[Path], list[str]]:
+def parse_source_file(source_file: Path) -> tuple[list[Path], list[str]]:
     try:
-        source = (root_dir / source_file).read_text(encoding="utf-8")
+        source = (root_dir() / source_file).read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(source_file))
     except Exception:
         logging.exception("Skipping source file [%s].", source_file)
         return [], []
 
-    visitor = Visitor(root_dir, source_file)
+    visitor = Visitor(source_file)
     visitor.visit(tree)
 
     dependecies = sorted(visitor.dependencies)
@@ -334,7 +337,6 @@ def parse_source_file(
 # TODO: How to deal with `__init__.py` files?
 def parse_source_file_recursively(
     graph: nx.DiGraph,
-    root_dir: Path,
     source_file: Path,
     visited: set[Path],
 ) -> None:
@@ -345,7 +347,7 @@ def parse_source_file_recursively(
         if current in visited:
             continue
 
-        dependencies, json_strings = parse_source_file(root_dir, current)
+        dependencies, json_strings = parse_source_file(current)
 
         current_str = str(current)
         graph.add_node(current_str)
@@ -380,18 +382,16 @@ def tag_node(graph: nx.DiGraph, file: Path, tag: str) -> None:
 
 def add_files_to_dependency_graph(
     graph: nx.DiGraph,
-    root_dir: Path,
     files: list[Path],
     file_type: str,
     visited: set[Path],
 ) -> None:
     for f in files:
-        parse_source_file_recursively(graph, root_dir, f, visited)
+        parse_source_file_recursively(graph, f, visited)
         tag_node(graph, f, file_type)
 
 
 def build_dependency_graph(
-    root_dir: Path,
     kernel_files: list[Path],
     test_files: list[Path],
     bench_files: list[Path],
@@ -399,9 +399,9 @@ def build_dependency_graph(
     graph: nx.DiGraph = nx.DiGraph()
     visited: set[Path] = set()
     # Add files that tests depends on.
-    add_files_to_dependency_graph(graph, root_dir, test_files, "test", visited)
+    add_files_to_dependency_graph(graph, test_files, "test", visited)
     # Add files that benchmarks depends on.
-    add_files_to_dependency_graph(graph, root_dir, bench_files, "bench", visited)
+    add_files_to_dependency_graph(graph, bench_files, "bench", visited)
     logging.debug(
         "Built dependency graph of Triton source files with %d nodes and %d edges.",
         graph.number_of_nodes(),
@@ -524,7 +524,7 @@ def main() -> None:
 
     diff_files = get_filename_diff(args.source, args.target)
     all_files, kernel_files, config_files, test_files, bench_files = (
-        list_triton_source_files(root_dir())
+        list_triton_source_files()
     )
     diff_inter_triton = diff_files & all_files
     del diff_files, all_files
@@ -545,7 +545,7 @@ def main() -> None:
     del diff_inter_triton
     log_file_list(logging.INFO, sorted_diff_inter_triton)
 
-    graph = build_dependency_graph(root_dir(), kernel_files, test_files, bench_files)
+    graph = build_dependency_graph(kernel_files, test_files, bench_files)
     _ = find_tests_to_run(graph, sorted_diff_inter_triton)
 
     end_timestamp = time.perf_counter()
