@@ -24,14 +24,18 @@ def cdiv(x: int, y: int) -> int:
     return (x + y - 1) // y
 
 
-def kv_cache_cast_to_fp8(x: torch.Tensor) -> torch.Tensor:
+def kv_cache_cast_to_fp8(x: torch.Tensor, padding=False) -> torch.Tensor:
     num_blocks, block_size, num_heads, head_dim = x.shape
     assert num_heads == 1
     x_amax = x.abs().float().amax(dim=3, keepdim=True).clamp(1e-4)
     sf = x_amax / 240.0
     x_scaled = (x * (1.0 / sf)).to(torch.float8_e4m3fnuz)
+
+    padding_size = 0 if not padding else (16 - (block_size * 4) % 16) % 16
     x_fp8 = torch.empty(
-        (num_blocks, block_size * (head_dim + 16)), device=x.device, dtype=torch.uint8
+        (num_blocks, block_size * (head_dim + 4 + padding_size)),
+        device=x.device,
+        dtype=torch.uint8,
     )
     x_fp8[:, : block_size * head_dim] = x_scaled.view(
         num_blocks, block_size * head_dim
@@ -39,7 +43,7 @@ def kv_cache_cast_to_fp8(x: torch.Tensor) -> torch.Tensor:
     x_fp8[:, block_size * head_dim : block_size * head_dim + 4] = sf.view(
         num_blocks, block_size
     ).view(dtype=torch.uint8)
-    return x_fp8.view(num_blocks, block_size, num_heads, head_dim + 16)
+    return x_fp8.view(num_blocks, block_size, num_heads, head_dim + 4 + padding_size)
 
 
 def ref_fp8_paged_mqa_logits(
@@ -229,7 +233,7 @@ def run_benchmark(args: argparse.Namespace):
                 counter += 1
 
         q_fp8 = q.to(qk_datatype)
-        kv_cache_fp8 = kv_cache_cast_to_fp8(kv_cache)
+        kv_cache_fp8 = kv_cache_cast_to_fp8(kv_cache, padding=args.padding)
 
         kv_indices = torch.zeros(
             prefix_sum_context_lens[-1], device="cuda", dtype=torch.int32
@@ -298,6 +302,7 @@ def run_benchmark(args: argparse.Namespace):
                 ChunkK=ChunkK,
                 Preshuffle=Preshuffle,
                 KVBlockSize=blocksize,
+                num_iters=3,
             )
         else:
             # deepgemm_fp8_paged_mqa_logits_stage1_ragged_k(
@@ -394,6 +399,12 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="Q sequence length (mtp + 1 == qo_len) in MTP mode",
+    )
+    parser.add_argument(
+        "-p",
+        "--padding",
+        action="store_true",
+        help="Padding ",
     )
     args = parser.parse_args()
     run_benchmark(args)
