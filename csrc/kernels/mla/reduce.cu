@@ -119,186 +119,6 @@ CK_TILE_DEVICE static auto MakeTileWindow(
     return tile_window;
 }
 
-template <typename T>
-class LocalLseLds
-{
-public:
-    CK_TILE_DEVICE LocalLseLds(T* p_local_lse, const int32_t group_size, const int32_t idx_in_group) :
-        p_local_lse_(p_local_lse), group_size_(group_size), idx_in_group_(idx_in_group) {}
-    CK_TILE_DEVICE T& operator[](int32_t idx) { return p_local_lse_[idx * group_size_ + idx_in_group_]; }
-    CK_TILE_DEVICE T operator[](int32_t idx) const { return p_local_lse_[idx * group_size_ + idx_in_group_]; }
-
-private:
-    T* p_local_lse_;
-    int32_t group_size_;
-    int32_t idx_in_group_;
-};
-
-template <typename Traits, typename LocalLse, typename lse_t>
-CK_TILE_DEVICE void reduce_lse(
-    const MlaReduceKernelV1Params& params,
-    const int32_t                  seq_idx,
-    const int32_t                  reduce_tile_start,
-    const int32_t                  reduce_tile_end,
-    const int32_t                  reduce_partial_map_0,
-    const int32_t                  reduce_partial_map_1,
-    const int32_t                  num_lse_per_thr,
-    const float*                   p_partial_lse_seq_base,
-    LocalLse&                      local_lse,
-    float*                         p_lds_lse_scale,
-    lse_t*                         p_final_lse_base)
-{
-    if (ck_tile::get_warp_id() == 0)
-    {
-        const int32_t lane_idx = ck_tile::get_lane_id();
-
-        // Load thread local LSE and get local max LSE
-        float max_lse = -INFINITY;
-
-        const int32_t num_splits = reduce_tile_end - reduce_tile_start;
-        if (num_splits == 2)
-        {
-            float lse = -INFINITY;
-            if (lane_idx < 2)
-            {
-                const int32_t reduce_partial_map = ((lane_idx == 0) ? reduce_partial_map_0 : reduce_partial_map_1);
-                const int64_t reduce_tile_pos = reduce_partial_map * int64_t(Traits::kNumHeadQ);
-                lse = p_partial_lse_seq_base[reduce_tile_pos];
-                max_lse = ck_tile::max(max_lse, lse);
-            }
-            local_lse[0] = lse;
-
-            for (int32_t i = 1; i < num_lse_per_thr; ++i)
-            {
-                local_lse[i] = -INFINITY;
-            }
-        }
-        else
-        {
-            auto cal_lse = [&](const int32_t local_idx) -> float
-            {
-                const int32_t split_idx = local_idx * ck_tile::get_warp_size() + lane_idx;
-                const int32_t tile_idx = reduce_tile_start + split_idx;
-                float lse = -INFINITY;
-                if (tile_idx < reduce_tile_end)
-                {
-                    const int64_t reduce_tile_pos =
-                        params.p_reduce_partial_map[tile_idx] * int64_t(Traits::kNumHeadQ);
-                    lse = p_partial_lse_seq_base[reduce_tile_pos];
-                    max_lse = ck_tile::max(max_lse, lse);
-                }
-                return lse;
-            };
-
-            if (num_splits <= ck_tile::get_warp_size())
-            {
-                local_lse[0] = cal_lse(0);
-
-                for (int32_t i = 1; i < num_lse_per_thr; ++i)
-                {
-                    local_lse[i] = -INFINITY;
-                }
-            }
-            else
-            {
-                #pragma unroll 2
-                for (int32_t local_idx = 0; local_idx < num_lse_per_thr; ++local_idx)
-                {
-                    local_lse[local_idx] = cal_lse(local_idx);
-                }
-            }
-        }
-
-        // Get global max LSE
-        #pragma unroll
-        for (int32_t offset = ck_tile::get_warp_size() / 2; offset > 0; offset /= 2)
-        {
-            const int32_t srd_lane = (offset ^ ck_tile::get_warp_size()) ^ ck_tile::get_lane_id();
-            max_lse = ck_tile::max(max_lse, ck_tile::warp_shuffle(max_lse, srd_lane));
-        }
-
-        // Get sum of LSE
-        float sum_lse = 0.f;
-        #pragma unroll 2
-        for (int32_t i = 0; i < num_lse_per_thr; ++i)
-        {
-            sum_lse += expf(local_lse[i] - max_lse);
-        }
-        #pragma unroll
-        for (int32_t offset = ck_tile::get_warp_size() / 2; offset > 0; offset /= 2)
-        {
-            const int32_t srd_lane = (offset ^ ck_tile::get_warp_size()) ^ ck_tile::get_lane_id();
-            sum_lse += ck_tile::warp_shuffle(sum_lse, srd_lane);
-        }
-
-        // Get global LSE
-        float global_lse = ((sum_lse == 0.f) || (sum_lse != sum_lse)) ? INFINITY : (logf(sum_lse) + max_lse);
-        if constexpr (Traits::kOutputLse)
-        {
-            if (lane_idx == 0)
-            {
-                lse_t* p_final_lse = p_final_lse_base + seq_idx * Traits::kNumHeadQ;
-                *p_final_lse = ck_tile::type_convert<lse_t>(global_lse);
-            }
-        }
-
-        // Write LSE to LDS
-        int32_t split_idx = lane_idx;
-        int32_t local_idx = 0;
-        do
-        {
-            p_lds_lse_scale[split_idx] = expf(local_lse[local_idx] - global_lse);
-            split_idx += ck_tile::get_warp_size();
-            ++local_idx;
-        }
-        while (local_idx < num_lse_per_thr);
-    }
-}
-
-template <typename Traits, typename out_t>
-CK_TILE_DEVICE void reduce_output(
-    const MlaReduceKernelV1Params& params,
-    const int32_t                  seq_idx,
-    const int32_t                  reduce_tile_start,
-    const int32_t                  reduce_tile_end,
-    const int32_t                  reduce_partial_map_0,
-    const int32_t                  reduce_partial_map_1,
-    const float*                   p_lds_lse_scale,
-    const float*                   p_partial_output_seq_base,
-    out_t*                         p_final_out_base)
-{
-    auto oaccu_window = ck_tile::make_tile_window(MakeTileWindow<Traits, const float>(nullptr),
-                                                  MakeOutputTileDistribution<Traits, const float>());
-    auto reg_out = ck_tile::make_static_distributed_tensor<float>(
-        decltype(ck_tile::load_tile(oaccu_window))::get_tile_distribution());
-    ck_tile::set_tile(reg_out, 0.f);
-
-    auto cal_out = [&](const int32_t reduce_partial_map, const int32_t split_idx)
-    {
-        const int64_t reduce_tile_pos = reduce_partial_map * int64_t(Traits::kNumHeadQ * Traits::kSizeDV);
-        const float* p_partial_output = p_partial_output_seq_base + reduce_tile_pos;
-        oaccu_window.set_bottom_tensor_view_data_ptr(p_partial_output);
-
-        const float lse_scale = p_lds_lse_scale[split_idx];
-        auto oaccu = ck_tile::load_tile(oaccu_window);
-        ck_tile::sweep_tile(oaccu, [&](auto idx) {
-            reg_out(idx) += lse_scale * oaccu(idx);
-        });
-    };
-
-    cal_out(reduce_partial_map_0, 0);
-    cal_out(reduce_partial_map_1, 1);
-
-    for (int32_t tile_idx = reduce_tile_start + 2; tile_idx < reduce_tile_end; ++tile_idx)
-    {
-        cal_out(params.p_reduce_partial_map[tile_idx], tile_idx - reduce_tile_start);
-    }
-
-    out_t* p_final_out = p_final_out_base + seq_idx * params.stride_s_o;
-    auto dram_out = MakeTileWindow<Traits, out_t>(p_final_out);
-    ck_tile::store_tile(dram_out, ck_tile::cast_tile<out_t>(reg_out));
-}
-
 template <typename Traits, typename lse_t, typename out_t>
 CK_TILE_DEVICE void mla_reduce_v1_impl(
     const MlaReduceKernelV1Params& params,
@@ -340,10 +160,8 @@ CK_TILE_DEVICE void mla_reduce_v1_impl(
         const float* p_partial_output_base =
             reinterpret_cast<float*>(params.p_partial_output) + head_idx * Traits::kSizeDV;
 
-        static_assert((ck_tile::get_warp_size() & (ck_tile::get_warp_size() - 1)) == 0);
-        const int32_t num_lse_per_thr =
-            integer_divide_ceil_power2(
-                params.max_splits, ck_tile::get_warp_size(), __builtin_ctz(ck_tile::get_warp_size()));
+        auto oaccu_window = ck_tile::make_tile_window(MakeTileWindow<Traits, const float>(nullptr),
+                                                      MakeOutputTileDistribution<Traits, const float>());
 
         for (int32_t seq_idx = final_loc.q_start; seq_idx < final_loc.q_end; ++seq_idx)
         {
@@ -351,35 +169,52 @@ CK_TILE_DEVICE void mla_reduce_v1_impl(
             const float* p_partial_lse_seq_base = p_partial_lse_base + local_seqlen_idx * Traits::kNumHeadQ;
             const float* p_partial_output_seq_base =
                 p_partial_output_base + local_seqlen_idx * Traits::kNumHeadQ * Traits::kSizeDV;
+            out_t* p_final_out = p_final_out_base + seq_idx * params.stride_s_o;
 
-            float* p_local_lse = p_lds_lse_scale + params.max_splits;
-            LocalLseLds<float> local_lse(p_local_lse, ck_tile::get_warp_size(), ck_tile::get_lane_id());
-            reduce_lse<Traits>(
-                params,
-                seq_idx,
-                reduce_tile_start,
-                reduce_tile_end,
-                reduce_partial_map_0,
-                reduce_partial_map_1,
-                num_lse_per_thr,
-                p_partial_lse_seq_base,
-                local_lse,
-                p_lds_lse_scale,
-                p_final_lse_base);
+            const int64_t reduce_tile_pos_lse_start =
+                params.p_reduce_partial_map[reduce_tile_start] * int64_t(Traits::kNumHeadQ);
+            const int64_t reduce_tile_pos_out_start = reduce_tile_pos_lse_start * Traits::kSizeDV;
 
-            __builtin_amdgcn_sched_barrier(0);
-            ck_tile::block_sync_lds();
+            oaccu_window.set_bottom_tensor_view_data_ptr(p_partial_output_seq_base + reduce_tile_pos_out_start);
+            auto reg_out = ck_tile::load_tile(oaccu_window);
+            const float lse = p_partial_lse_seq_base[reduce_tile_pos_lse_start];
+            float max_lse = lse;
+            float sum_e_lse = 1.0f;
 
-            reduce_output<Traits>(
-                params,
-                seq_idx,
-                reduce_tile_start,
-                reduce_tile_end,
-                reduce_partial_map_0,
-                reduce_partial_map_1,
-                p_lds_lse_scale,
-                p_partial_output_seq_base,
-                p_final_out_base);
+            for (int32_t tile_idx = reduce_tile_start + 1; tile_idx < reduce_tile_end; ++tile_idx)
+            {
+                const int64_t reduce_tile_pos_lse = params.p_reduce_partial_map[tile_idx] * int64_t(Traits::kNumHeadQ);
+                const int64_t reduce_tile_pos_out = reduce_tile_pos_lse * Traits::kSizeDV;
+
+                oaccu_window.set_bottom_tensor_view_data_ptr(p_partial_output_seq_base + reduce_tile_pos_out);
+                auto oaccu = ck_tile::load_tile(oaccu_window);
+
+                const float lse = p_partial_lse_seq_base[reduce_tile_pos_lse];
+                const float new_max_lse = ck_tile::max(max_lse, lse);
+                const float old_scale = expf(max_lse - new_max_lse);
+                const float new_scale = expf(lse - new_max_lse);
+
+                ck_tile::sweep_tile(oaccu, [&](auto idx) {
+                    reg_out(idx) = old_scale * reg_out(idx) + new_scale * oaccu(idx);
+                });
+
+                max_lse = new_max_lse;
+                sum_e_lse = sum_e_lse * old_scale + new_scale;
+            }
+
+            reg_out = ck_tile::tile_elementwise_in(
+                [&](const auto& elem) { return elem / sum_e_lse; },
+                reg_out);
+
+            auto dram_out = MakeTileWindow<Traits, out_t>(p_final_out);
+            ck_tile::store_tile(dram_out, ck_tile::cast_tile<out_t>(reg_out));
+
+            if constexpr(Traits::kOutputLse)
+            {
+                const float final_lse =
+                    ((sum_e_lse == 0.f) || (sum_e_lse != sum_e_lse)) ? INFINITY : (logf(sum_e_lse) + max_lse);
+                p_final_lse_base[seq_idx * Traits::kNumHeadQ] = ck_tile::type_convert<lse_t>(final_lse);
+            }
         }
     }
 }
