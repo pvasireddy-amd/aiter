@@ -125,8 +125,7 @@ CK_TILE_DEVICE void mla_reduce_v1_impl(
     const int32_t                  head_idx,
     const int32_t                  tile_idx,
     const int32_t                  reduce_tile_start,
-    const int32_t                  reduce_tile_end,
-    float*                         p_lds_lse_scale)
+    const int32_t                  reduce_tile_end)
 {
     // In theory, we can handle the case that #split = 1. However, it is meaningless and metadata should be in charge of
     // getting rid of this kind of scenaro.
@@ -224,8 +223,6 @@ __launch_bounds__(Traits::kNumThreads, Traits::kOccupancy)
 __global__ void kn_mla_reduce_v1_ps(
     const MlaReduceKernelV1Params params)
 {
-    extern __shared__ float p_lds_lse_scale[];
-
     const int32_t last_reduce_tile = params.p_reduce_indptr[params.num_reduce_tile];
     const int32_t tot_work = Traits::kNumHeadQ * params.num_reduce_tile;
     for (int32_t work_idx = blockIdx.x; work_idx < tot_work; work_idx += gridDim.x)
@@ -242,7 +239,7 @@ __global__ void kn_mla_reduce_v1_ps(
         }
 
         mla_reduce_v1_impl<Traits, lse_t, out_t>(
-            params, head_idx, tile_idx, reduce_tile_start, reduce_tile_end, p_lds_lse_scale);
+            params, head_idx, tile_idx, reduce_tile_start, reduce_tile_end);
     }
 }
 
@@ -251,8 +248,6 @@ __launch_bounds__(Traits::kNumThreads, Traits::kOccupancy)
 __global__ void kn_mla_reduce_v1(
     const MlaReduceKernelV1Params params)
 {
-    extern __shared__ float p_lds_lse_scale[];
-
     const int32_t head_idx = blockIdx.x;
     const int32_t tile_idx = blockIdx.y;
 
@@ -260,7 +255,7 @@ __global__ void kn_mla_reduce_v1(
     const int32_t reduce_tile_end = params.p_reduce_indptr[tile_idx + 1];
 
     mla_reduce_v1_impl<Traits, lse_t, out_t>(
-        params, head_idx, tile_idx, reduce_tile_start, reduce_tile_end, p_lds_lse_scale);
+        params, head_idx, tile_idx, reduce_tile_start, reduce_tile_end);
 }
 
 // NRFM: No Reduce Final Map
@@ -386,28 +381,15 @@ void dispatch_mla_reduce_v1(
     const int32_t                  num_cu,
     const hipStream_t&             stream)
 {
-    hipDevice_t dev;
-    hipDeviceProp_t dev_prop;
-    HIP_CALL(hipGetDevice(&dev));
-    HIP_CALL(hipGetDeviceProperties(&dev_prop, dev));
-
-    const int32_t lds_size = params.max_splits * sizeof(float) * 2;
-    if (lds_size <= (dev_prop.maxSharedMemoryPerMultiProcessor / Traits::kOccupancy))
+    if (Traits::kNumHeadQ * params.num_reduce_tile <= (num_cu * Traits::kOccupancy * 2))
     {
-        if (Traits::kNumHeadQ * params.num_reduce_tile <= (num_cu * Traits::kOccupancy * 2))
-        {
-            const dim3 grid = dim3(Traits::kNumHeadQ, params.num_reduce_tile);
-            kn_mla_reduce_v1<Traits, lse_t, out_t><<<grid, Traits::kNumThreads, lds_size, stream>>>(params);
-        }
-        else
-        {
-            const dim3 grid = dim3(num_cu * Traits::kOccupancy * 2);
-            kn_mla_reduce_v1_ps<Traits, lse_t, out_t><<<grid, Traits::kNumThreads, lds_size, stream>>>(params);
-        }
+        const dim3 grid = dim3(Traits::kNumHeadQ, params.num_reduce_tile);
+        kn_mla_reduce_v1<Traits, lse_t, out_t><<<grid, Traits::kNumThreads, 0, stream>>>(params);
     }
     else
     {
-        TORCH_CHECK(false, "kn_mla_reduce_v1: There are too much splits. We cannot handle them.");
+        const dim3 grid = dim3(num_cu * Traits::kOccupancy * 2);
+        kn_mla_reduce_v1_ps<Traits, lse_t, out_t><<<grid, Traits::kNumThreads, 0, stream>>>(params);
     }
 }
 
