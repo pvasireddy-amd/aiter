@@ -9,6 +9,7 @@
 #include "aiter_hip_common.h"
 #include "custom_all_reduce.cuh"
 #include "mla.h"
+#include "pa.h"
 
 
 CK_TILE_HOST_DEVICE int32_t cal_cost(
@@ -67,6 +68,13 @@ struct MlaMetadataV1KernelParameter
     int32_t        qk_batch_ratio;
     int32_t        num_splits;
     bool           is_causal;
+};
+
+struct PaMetadataV1KernelParameter: MlaMetadataV1KernelParameter
+{
+    // Inputs
+    int32_t        num_heads_k;
+    int32_t        gqa_ratio;
 };
 
 template <typename T>
