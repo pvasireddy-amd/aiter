@@ -8,9 +8,18 @@ template <int32_t kPackedQoLenPerWg_,
           int32_t kUniSeqlenQo_,
           bool kLdsBatchInfo_,
           bool kIsSparse_ = false>
-struct PaMetadataV12Traits: MlaMetadataV12Traits
+struct PaMetadataV12Traits
 {
+    static constexpr int32_t kPackedQoLenPerWg      = kPackedQoLenPerWg_;
+    static constexpr int32_t kPackedQoLenPerWg_log2 = __builtin_ctz(kPackedQoLenPerWg);
+    static constexpr bool kQoSplits                 = kQoSplits_;
+    // <= -1: read from seqlens_qo_indptr
+    // ==  0: read from PaMetadataV1KernelParameter::uni_seqlen_qo
+    // >=  1: read from PaMetadataV12Traits::kUniSeqlenQo
+    static constexpr int32_t kUniSeqlenQo            = kUniSeqlenQo_;
     static constexpr int32_t kFixedOverheadNumBlocks = 1;
+    static constexpr int32_t kIsSparse               = kIsSparse_;
+    static constexpr int32_t kLdsBatchInfo           = kLdsBatchInfo_;
 };
 
 template <typename Traits>
@@ -118,18 +127,21 @@ __launch_bounds__(ck_tile::get_warp_size(), 1) __global__
 
                 auto fill_work_info = [&](const int32_t qo_tile_idx, const int32_t split_idx) {
                     const int32_t global_qo_tile_idx = tot_qo_tiles + qo_tile_idx;
+                    const int32_t global_q_start = qo_state.get_begin(curr_batch) + qo_tile_idx * qo_tile_size;
+                    const int32_t global_q_end = ck_tile::min(global_q_start + qo_tile_size,
+                                                    qo_state.get_end(curr_batch));
 
                     PaWorkInfo work_info{};
                     work_info.batch_idx = curr_batch;
-                    work_info.qo_start =
-                        qo_state.get_begin(curr_batch) + qo_tile_idx * qo_tile_size;
+                    work_info.qo_start  = qo_tile_idx * qo_tile_size;
                     work_info.qo_end    = ck_tile::min(work_info.qo_start + qo_tile_size,
-                                                    qo_state.get_end(curr_batch));
-                    work_info.kv_start  = curr_kv_begin + (curr_kv_block * params.kv_granularity);
-                    work_info.kv_end    = ck_tile::min(work_info.kv_start +
-                                                        (remain_kv_blocks * params.kv_granularity),
-                                                    curr_kv_end - (num_qo_tiles - 1 - qo_tile_idx));
-                    work_info.kv_offset = curr_kv_end - work_info.kv_end;
+                                                    qo_state.get_seqlen_qo(curr_batch));
+                    work_info.kv_start  = curr_kv_block;
+                    work_info.kv_end    = ck_tile::min(work_info.kv_start + remain_kv_blocks,
+                                            integer_divide_ceil_power2(
+                                                (curr_kv_end - (num_qo_tiles - 1 - qo_tile_idx)),
+                                                params.kv_granularity, params.kv_granularity_log2));
+                    work_info.q_head_range = qo_state.get_q_head_range(0, params.num_heads);
 
                     // split related info
                     if(curr_n_split_idx > 0)
@@ -140,8 +152,8 @@ __launch_bounds__(ck_tile::get_warp_size(), 1) __global__
                         // set reduce info
                         params.p_reduce_indptr[global_qo_tile_idx + 1] =
                             last_reduce_indptr + (qo_tile_idx + 1) * num_splits;
-                        params.p_reduce_final_map[global_qo_tile_idx * 2]     = work_info.qo_start;
-                        params.p_reduce_final_map[global_qo_tile_idx * 2 + 1] = work_info.qo_end;
+                        params.p_reduce_final_map[global_qo_tile_idx * 2]     = global_q_start;
+                        params.p_reduce_final_map[global_qo_tile_idx * 2 + 1] = global_q_end;
 
                         if constexpr(Traits::kQoSplits)
                         {
@@ -258,17 +270,17 @@ __launch_bounds__(ck_tile::get_warp_size(), 1) __global__
                     auto fill_work_info = [&](const int32_t qo_tile_idx) {
                         PaWorkInfo work_info{};
                         work_info.batch_idx = curr_batch;
-                        work_info.qo_start =
-                            qo_state.get_begin(curr_batch) + qo_tile_idx * qo_tile_size;
+                        work_info.qo_start = qo_tile_idx * qo_tile_size;
                         work_info.qo_end = ck_tile::min(work_info.qo_start + qo_tile_size,
-                                                        qo_state.get_end(curr_batch));
-                        work_info.kv_start =
-                            curr_kv_begin + (curr_kv_block * params.kv_granularity);
-                        work_info.kv_end = ck_tile::min(
-                            work_info.kv_start + (consuming_blks * params.kv_granularity),
-                            curr_kv_end - (num_qo_tiles - 1 - qo_tile_idx));
-                        work_info.kv_offset      = curr_kv_end - work_info.kv_end;
+                                                        qo_state.get_seqlen_qo(curr_batch));
+                        work_info.kv_start = curr_kv_block;
+                        work_info.kv_end = ck_tile::min(work_info.kv_start + consuming_blks,
+                                            integer_divide_ceil_power2(
+                                                (curr_kv_end - (num_qo_tiles - 1 - qo_tile_idx)),
+                                                params.kv_granularity, params.kv_granularity_log2));
+                        // work_info.kv_offset      = curr_kv_end - work_info.kv_end;
                         work_info.partial_qo_loc = partial_idx + qo_tile_idx * qo_tile_size;
+                        work_info.q_head_range = qo_state.get_q_head_range(0, params.num_heads);
                         p_work_info_set[num_works + qo_tile_idx] = work_info;
 
                         if constexpr(Traits::kQoSplits)
@@ -314,7 +326,7 @@ __launch_bounds__(ck_tile::get_warp_size(), 1) __global__
 }
 
 template <int32_t kPackedQoLenPerWg, bool kQoSplits, int32_t kUniSeqlenQo, bool kIsSparse>
-void dispatch_mla_metadata_v1_2_device(const PaMetadataV1KernelParameter& params,
+void dispatch_pa_metadata_v1_2_device(const PaMetadataV1KernelParameter& params,
                                        const hipStream_t stream,
                                        const int32_t max_seqlen_qo,
                                        const int32_t warp_size,
@@ -322,7 +334,7 @@ void dispatch_mla_metadata_v1_2_device(const PaMetadataV1KernelParameter& params
 {
     const dim3 grid = dim3(1, 1, 1);
 
-    using DummyTraits = MlaMetadataV12Traits<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, true, kIsSparse>;
+    using DummyTraits = PaMetadataV12Traits<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, true, kIsSparse>;
     const int32_t lds_bytes_per_batch = sizeof(int32_t) * (QoState<DummyTraits>::is_unique() ? 1 : 2);
     const int32_t max_qo_tiles = kQoSplits ? (ck_tile::integer_divide_ceil(max_seqlen_qo, kPackedQoLenPerWg)) : 1;
     const int32_t lds_bytes_partial_info = kQoSplits ? params.num_cu * max_qo_tiles * sizeof(int32_t) : 0;
@@ -330,12 +342,12 @@ void dispatch_mla_metadata_v1_2_device(const PaMetadataV1KernelParameter& params
 
     if (params.num_batches <= max_lds_batch_size)
     {
-        using Traits = MlaMetadataV12Traits<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, true, kIsSparse>;
+        using Traits = PaMetadataV12Traits<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, true, kIsSparse>;
         kn_get_pa_metadata_v1_2<Traits><<<grid, warp_size, lds_size, stream>>>(params);
     }
     else
     {
-        using Traits = MlaMetadataV12Traits<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, false, kIsSparse>;
+        using Traits = PaMetadataV12Traits<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, false, kIsSparse>;
         kn_get_pa_metadata_v1_2<Traits><<<grid, warp_size, lds_size, stream>>>(params);
     }
 }
@@ -366,7 +378,7 @@ void get_pa_metadata_v1_2_device(const torch::Tensor& seqlens_qo_indptr, // [bat
     hipGetDevice(&dev);
     hipGetDeviceProperties(&dev_prop, dev);
 
-    const int32_t num_clusters = dev_prop.multiProcessorCount / num_heads_k;
+    const int32_t num_clusters = dev_prop.multiProcessorCount;
     const bool is_sparse       = (topk >= 0);
 
     int32_t num_batches    = seqlens_kv_indptr.size(0) - 1;
@@ -374,27 +386,11 @@ void get_pa_metadata_v1_2_device(const torch::Tensor& seqlens_qo_indptr, // [bat
     int32_t qk_batch_ratio = 1;
     int32_t uni_seqlen_qo  = ori_uni_seqlen_qo;
 
-    // In the following cases, we use #head=16 to simulate cases which is not natively supported by
-    // mla main kernel.
-    if((num_heads != 16) &&
-       (num_heads != 128) && // main kernel natively supports #head=16 or #head=128
-       (num_heads % 16 == 0) && (num_heads < 128))
-    {
-        qk_batch_ratio = num_heads / 16;
-        num_heads      = 16;
-        num_batches *= qk_batch_ratio;
-    }
-
     if(is_sparse)
     {
         num_batches *= uni_seqlen_qo;
         uni_seqlen_qo = 1;
     }
-
-    TORCH_CHECK((num_heads == 16) || (num_heads == 128),
-                __func__,
-                ": only supports #heads in [16, 128], or (#head, uni_seqlen_qo) = (16*N, 1) where "
-                "N is in [2, 8).")
 
     int32_t num_splits = max_split_per_batch < 0 ? num_clusters : min(num_clusters, max_split_per_batch * num_batches);
 
@@ -426,6 +422,6 @@ void get_pa_metadata_v1_2_device(const torch::Tensor& seqlens_qo_indptr, // [bat
         kPackedQoLenPerWg,
         params.uni_seqlen_qo,
         topk,
-        dispatch_mla_metadata_v1_2_device<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, kIsSparse>(
+        dispatch_pa_metadata_v1_2_device<kPackedQoLenPerWg, kQoSplits, kUniSeqlenQo, kIsSparse>(
             params, stream, max_seqlen_qo, dev_prop.warpSize, dev_prop.maxSharedMemoryPerMultiProcessor));
 }

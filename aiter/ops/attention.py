@@ -295,6 +295,7 @@ def get_pa_metadata_v1(
     uni_seqlen_qo: int = -1,
     fast_mode: bool = True,
     topk: int = -1,
+    max_split_per_batch: int = -1,
 ) -> None:
     """
     Inputs:

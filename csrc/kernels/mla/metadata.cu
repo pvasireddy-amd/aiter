@@ -149,11 +149,10 @@ std::vector<torch::Tensor> get_mla_metadata_v1_no_redundant(
 //   [1] work_info           (#work, 8)
 //   [1.0] bs_index:         (#work),            The index of batch handled by each work.
 //   [1.1] partial_index:    (#work),            The index of tile in output buffer when splits. -1 means no split.
-//   [1.2] q_start:          (#work),            The global index in seq where q/o starts. Use global index here can
-//                                               reduce memory access count in kernel.
-//   [1.3] q_end:            (#work),            The global index in seq where q/o ends (not included).
-//   [1.4] kv_start:         (#work),            The global index in seq where k/v starts.
-//   [1.5] kv_end:           (#work),            The global index in seq where k/v ends (not included).
+//   [1.2] q_start:          (#work),            The local index in seq where q/o starts.
+//   [1.3] q_end:            (#work),            The local index in seq where q/o ends (not included).
+//   [1.4] kv_start:         (#work),            The local index in block_table where k/v block starts.
+//   [1.5] kv_end:           (#work),            The local index in block_table where k/v block ends (not included).
 //   [1.6] kv_offset:        (#work),            Remaining length in seq from kv_end to the end of current batch.
 //   [1.7] q_head_range:     (#work),            The start index(low 16bits) and end index(high 16bits) of q heads.
 //   [2] work_indptr:        (#cu_part + 1),     The IDs of work handled by each cu_part.
@@ -181,7 +180,8 @@ void get_pa_metadata_v1(
     const int32_t        max_seqlen_qo,
     const int32_t        uni_seqlen_qo,
     const bool           fast_mode,  // version choose
-    const int32_t        topk)
+    const int32_t        topk,
+    const int32_t        max_split_per_batch)
 {
     const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(seqlens_qo_indptr));
 
@@ -206,6 +206,7 @@ void get_pa_metadata_v1(
         max_seqlen_qo,
         uni_seqlen_qo,
         topk,
+        max_split_per_batch,
         work_metadata_ptrs,
         work_info_set,
         work_indptr,

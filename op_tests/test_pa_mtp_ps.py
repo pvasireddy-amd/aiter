@@ -340,7 +340,8 @@ def test_pa_mtp(
     head_size: int,
     block_size: int,
     dtype: torch.dtype,
-    qlen,
+    qlen: int,
+    varlen: bool = False,
 ) -> dict:
     ret = {}
     seed = 0
@@ -358,7 +359,20 @@ def test_pa_mtp(
     seq_lens_qo = torch.randint(
         1, 5, (batch_size,), dtype=torch.int, device=device
     ).fill_(qlen)
-    # print(seq_lens_qo)
+    seq_lens_kv = torch.empty(batch_size, dtype=torch.int)
+    if varlen:
+        for i in range(batch_size):
+            # seq_lens_kv[i] = max(random.normalvariate(ctx_lens, ctx_lens / 2), ctx_lens)
+            seq_lens_kv[i] = random.uniform(5, ctx_lens)
+            seq_lens_qo[i] = max(
+                min(random.normalvariate(qlen, qlen / 2), qlen), 1
+            )
+    else:
+        seq_lens_kv.fill_(ctx_lens)
+        seq_lens_qo.fill_(qlen)
+    seq_lens_qo.fill_(qlen)
+    print(f"==>seq_lens_qo:\n{seq_lens_qo}")
+    print(f"==>seq_lens_kv:\n{seq_lens_kv}")
     qo_indptr[1 : batch_size + 1] = torch.cumsum(seq_lens_qo, dim=0)
     total_qo = qo_indptr[-1].item()
     max_qlen = seq_lens_qo.max().item()
@@ -410,6 +424,74 @@ def test_pa_mtp(
         seq_lens,
         qo_indptr,
     )
+
+    (
+        (work_meta_data_size, work_meta_data_type),
+        (work_indptr_size, work_indptr_type),
+        (work_info_set_size, work_info_set_type),
+        (reduce_indptr_size, reduce_indptr_type),
+        (reduce_final_map_size, reduce_final_map_type),
+        (reduce_partial_map_size, reduce_partial_map_type),
+    ) = aiter.get_mla_metadata_info_v1(
+        batch_size,
+        max_qlen,
+        num_query_heads,
+        query.dtype,
+        k_cache.dtype,
+        is_sparse=False,
+        fast_mode=True,
+    )
+
+    # aiter implementation
+    # the tensor's meaning please refer aiter/ops/attention.py
+    work_meta_data = torch.empty(
+        work_meta_data_size, dtype=work_meta_data_type, device="cuda"
+    )
+    work_indptr = torch.empty(work_indptr_size, dtype=work_indptr_type, device="cuda")
+    work_info_set = torch.empty(
+        work_info_set_size,
+        dtype=work_info_set_type,
+        device="cuda",
+    )
+    reduce_indptr = torch.empty(
+        reduce_indptr_size, dtype=reduce_indptr_type, device="cuda"
+    )
+    reduce_final_map = torch.empty(
+        reduce_final_map_size, dtype=reduce_final_map_type, device="cuda"
+    )
+    reduce_partial_map = torch.empty(
+        reduce_partial_map_size, dtype=reduce_partial_map_type, device="cuda"
+    )
+
+    kv_indptr = torch.zeros(batch_size + 1, dtype=torch.int)
+    kv_indptr[1 : batch_size + 1] = torch.cumsum(seq_lens_kv, dim=0)
+    print(f"==>kv_indptr:{kv_indptr.shape}\n{kv_indptr}")
+    meta = aiter.get_pa_metadata_v1(
+        qo_indptr,
+        kv_indptr,
+        num_query_heads // num_kv_heads,
+        num_kv_heads,
+        True,
+        work_meta_data,
+        work_info_set,
+        work_indptr,
+        reduce_indptr,
+        reduce_final_map,
+        reduce_partial_map,
+        kv_granularity=max(block_size, 16),
+        max_seqlen_qo=int(max_qlen),
+        uni_seqlen_qo=qlen,
+        fast_mode=True,
+        max_split_per_batch=-1,
+    )
+    torch.set_printoptions(threshold=99999999, linewidth=120)
+    print(f"==>work_indptr:{work_indptr.shape}\n{work_indptr}")
+    print(f"==>work_info_set:{work_info_set.shape}\n{work_info_set}")
+    print(f"==>reduce_indptr:\n{reduce_indptr}")
+    print(f"==>reduce_final_map:\n{reduce_final_map}")
+    print(f"==>reduce_partial_map:{reduce_partial_map.shape}\n{reduce_partial_map}")
+    import sys; sys.exit(-1)
+
 
     # out_asm_noquant, us_asm_noquant = run_aiter_asm(
     #     query,
@@ -573,6 +655,12 @@ parser.add_argument(
     help="""Batch size.
     e.g. -b 128""",
 )
+parser.add_argument(
+    "--varlen",
+    action="store_true",
+    help="""variable kv seqlens per batch. Default: False.
+    --varlen # True""",
+)
 args = parser.parse_args()
 if args.dtype is None:
     l_dtype = [dtypes.d_dtypes[key] for key in l_dtype]
@@ -601,6 +689,7 @@ for dtype in l_dtype:
             block_size,
             dtype,
             qlen,
+            varlen = args.varlen
         )
         df.append(ret)
     df = pd.DataFrame(df)

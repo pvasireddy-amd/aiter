@@ -304,6 +304,17 @@ public:
         }
     }
 
+    CK_TILE_DEVICE int32_t get_seqlen_qo(
+        const int32_t batch_idx) {
+        return p_lds_seqlens_qo_[batch_idx];
+    }
+
+    CK_TILE_DEVICE int32_t get_q_head_range(
+        const int32_t q_head_start, const int32_t q_head_end) {
+        int32_t q_head_range = (q_head_end << 16) | (q_head_start & 0xFFFF);
+        return q_head_range;
+    }
+
 private:
     const int32_t uni_seqlen_qo_;
     const int32_t ori_seqlen_qo_;
