@@ -498,18 +498,18 @@ def test_pa_mtp(
             num_kv_heads,
             True,
             work_metadata_ptrs,
-            work_indptr,
             work_info,
+            work_indptr,
             reduce_indptr,
             reduce_final_map,
             reduce_partial_map,
         )
         num_kv_splits = 1
         splitLse = torch.empty(
-            (total_qo, 1, num_query_heads, 1), dtype=dtypes.fp32, device=device
+            (reduce_partial_map.size(0) * max_qlen, 1, num_query_heads, 1), dtype=dtypes.fp32, device=device
         )
         splitData = torch.empty(
-            (total_qo, num_kv_splits, num_query_heads, head_size),
+            (reduce_partial_map.size(0) * max_qlen, num_kv_splits, num_query_heads, head_size),
             dtype=dtypes.fp32,
             device=device,
         )

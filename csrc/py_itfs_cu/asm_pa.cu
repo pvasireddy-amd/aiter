@@ -39,10 +39,10 @@ struct __attribute__((packed)) KernelArgs
     p3 _p16;
     unsigned int KVs;
     p3 _p17;
-    unsigned int GQA;
+    unsigned int mtp;
     p3 _p18;
-    void* ptr_QTP;
-    p2 _p19;
+    unsigned int GQA;
+    p3 _p19;
     void* ptr_Metadata;
     p2 _p20;
     void* ptr_SplitO;
@@ -162,8 +162,9 @@ torch::Tensor pa_fwd(torch::Tensor& Q, //   [num_seqs, num_heads, head_size]
     args.Qs           = stride_Q;
     args.Bs           = stride_KV_blk;
     args.KVs          = stride_KV_head;
+    args.mtp          = max_qlen - 1;
     args.GQA          = gqa_ratio;
-    args.ptr_QTP      = qo_indptr ? qo_indptr.value().data_ptr() : nullptr;
+    // args.ptr_QTP      = qo_indptr ? qo_indptr.value().data_ptr() : nullptr;
     args.ptr_Metadata = work_meta_data ? work_meta_data.value().data_ptr() : nullptr;
     args.ptr_SplitO   = work_meta_data ? splitData.value().data_ptr() : nullptr;
     args.ptr_SplitLSE = work_meta_data ? splitLse.value().data_ptr() : nullptr;
