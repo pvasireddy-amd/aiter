@@ -43,6 +43,12 @@ struct __attribute__((packed)) KernelArgs
     p3 _p18;
     void* ptr_QTP;
     p2 _p19;
+    void* ptr_Metadata;
+    p2 _p20;
+    void* ptr_SplitO;
+    p2 _p21;
+    void* ptr_SplitLSE;
+    p2 _p22;
 };
 
 std::string get_heuristic_kernel(std::string q_type,
@@ -52,6 +58,7 @@ std::string get_heuristic_kernel(std::string q_type,
                                  int msk,
                                  int hp,
                                  int block_size,
+                                 int ps,
                                  CFG* cfgs)
 {
     const std::vector<int> mtp_flags = (mtp > 0) ? std::vector<int>{mtp, 1} : std::vector<int>{0};
@@ -67,7 +74,7 @@ std::string get_heuristic_kernel(std::string q_type,
                 // hp is just distinct from uhp
                 if(cfg.q_type == q_type && cfg.kv_type == kv_type && cfg.gqa == gqa_ &&
                    cfg.mtp == mtp_ && cfg.msk == msk && (cfg.hp == hp || hp == 1) &&
-                   cfg.block_size == block_size)
+                   cfg.block_size == block_size && cfg.ps == ps)
 
                     return el.first;
             }
@@ -90,7 +97,9 @@ std::string get_heuristic_kernel(std::string q_type,
                 " hp:",
                 hp,
                 " block_size:",
-                block_size);
+                block_size,
+                " ps:",
+                ps);
     return "";
 }
 const float f_log2E = log2f(expf(1));
@@ -101,13 +110,16 @@ torch::Tensor pa_fwd(torch::Tensor& Q, //   [num_seqs, num_heads, head_size]
                      torch::Tensor& block_tables, //   [num_seqs, max_num_blocks_per_seq]
                      torch::Tensor& context_lens, //   [num_seqs]
                      int block_tables_stride0,
-                     int max_qlen                           = 1,
-                     std::optional<torch::Tensor> K_QScale  = std::nullopt,
-                     std::optional<torch::Tensor> V_QScale  = std::nullopt,
-                     std::optional<torch::Tensor> out_      = std::nullopt,
-                     std::optional<torch::Tensor> qo_indptr = std::nullopt,
-                     std::optional<int> high_precision      = 1,
-                     std::optional<std::string> kernelName_ = std::nullopt)
+                     int max_qlen                                = 1,
+                     std::optional<torch::Tensor> K_QScale       = std::nullopt,
+                     std::optional<torch::Tensor> V_QScale       = std::nullopt,
+                     std::optional<torch::Tensor> out_           = std::nullopt,
+                     std::optional<torch::Tensor> qo_indptr      = std::nullopt,
+                     std::optional<torch::Tensor> work_meta_data = std::nullopt, //   metadata addr
+                     std::optional<torch::Tensor> splitData      = std::nullopt,
+                     std::optional<torch::Tensor> splitLse       = std::nullopt,
+                     std::optional<int> high_precision           = 1,
+                     std::optional<std::string> kernelName_      = std::nullopt)
 {
     torch::Tensor output = out_.value_or(torch::empty_like(Q));
     int batch            = context_lens.size(0);
@@ -144,14 +156,17 @@ torch::Tensor pa_fwd(torch::Tensor& Q, //   [num_seqs, num_heads, head_size]
         args.ptr_KQ = nullptr;
         args.ptr_VQ = nullptr;
     }
-    args.sclg2e    = k_scalar;
-    args.mblk      = block_tables_stride0;
-    args.kv_nheads = num_kv_heads;
-    args.Qs        = stride_Q;
-    args.Bs        = stride_KV_blk;
-    args.KVs       = stride_KV_head;
-    args.GQA       = gqa_ratio;
-    args.ptr_QTP   = qo_indptr ? qo_indptr.value().data_ptr() : nullptr;
+    args.sclg2e       = k_scalar;
+    args.mblk         = block_tables_stride0;
+    args.kv_nheads    = num_kv_heads;
+    args.Qs           = stride_Q;
+    args.Bs           = stride_KV_blk;
+    args.KVs          = stride_KV_head;
+    args.GQA          = gqa_ratio;
+    args.ptr_QTP      = qo_indptr ? qo_indptr.value().data_ptr() : nullptr;
+    args.ptr_Metadata = work_meta_data ? work_meta_data.value().data_ptr() : nullptr;
+    args.ptr_SplitO   = work_meta_data ? splitData.value().data_ptr() : nullptr;
+    args.ptr_SplitLSE = work_meta_data ? splitLse.value().data_ptr() : nullptr;
     // std::cout << "sclg2e: " << args.sclg2e << " mblk:" << args.mblk
     //           << " kv_nheads:" << args.kv_nheads << " Qs:" << args.Qs << " Bs:" << args.Bs
     //           << " KVs:" << args.KVs << std::endl;
@@ -165,6 +180,7 @@ torch::Tensor pa_fwd(torch::Tensor& Q, //   [num_seqs, num_heads, head_size]
     int mtp;
     int msk;
     int hp;
+    int ps = work_meta_data.has_value() ? 1 : 0;
     // 1. "q_type"
     if(Q.dtype() == at::ScalarType::Half)
         q_type = "fp16";
@@ -211,13 +227,14 @@ torch::Tensor pa_fwd(torch::Tensor& Q, //   [num_seqs, num_heads, head_size]
     static std::unordered_map<std::string, std::unique_ptr<AiterAsmKernel>> impl_ptr_map;
 
     std::string kernelName = kernelName_.value_or(
-        get_heuristic_kernel(q_type, kv_type, gqa_ratio, mtp, msk, hp, block_size, config_map));
+        get_heuristic_kernel(q_type, kv_type, gqa_ratio, mtp, msk, hp, block_size, ps, config_map));
     if(kernelName.empty())
     {
         TORCH_CHECK(false, __func__, "not supported this kernel now! ");
     }
 
     AiterAsmKernel* impl_ptr = nullptr;
+    int gdx, gdy;
 
     auto it = config_map->find(kernelName);
     if(it != config_map->end())
@@ -231,18 +248,28 @@ torch::Tensor pa_fwd(torch::Tensor& Q, //   [num_seqs, num_heads, head_size]
             result.first->second = std::make_unique<AiterAsmKernel>(name, co_name);
         }
         impl_ptr = result.first->second.get();
+        if(cfg.ps)
+        {
+            gdx = get_num_cu_func();
+            gdy = 1;
+        }
+        else
+        {
+            gdx = num_kv_heads;
+            gdy = batch;
+        }
     }
     else
         TORCH_CHECK(false, __func__, " not find kernel " + kernelName);
 
     impl_ptr->launch_kernel({&args,
                              &arg_size,
-                             num_kv_heads, // gdx
-                             batch,        // gdy
-                             1,            // gdz
-                             256,          // bdx: 4 wv64
-                             1,            // bdy
-                             1,            // bdz
+                             gdx, // gdx
+                             gdy, // gdy
+                             1,   // gdz
+                             256, // bdx: 4 wv64
+                             1,   // bdy
+                             1,   // bdz
                              stream});
     return output;
 }

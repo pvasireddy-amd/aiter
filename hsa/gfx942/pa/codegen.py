@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2018-2025, Advanced Micro Devices, Inc. All rights reserved.
 
-import os
 import argparse
 import glob
+import os
+
 import pandas as pd
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -13,9 +14,9 @@ template = """// SPDX-License-Identifier: MIT
 #pragma once
 #include <unordered_map>
 
-#define ADD_CFG(q_type, kv_type, gqa, mtp, msk, hp, block_size, path, name, co)         \\
+#define ADD_CFG(q_type, kv_type, gqa, mtp, msk, hp, block_size, ps, path, name, co)         \\
     {                                         \\
-        name, { name, path co, q_type, kv_type, gqa, mtp, msk, hp, block_size }         \\
+        name, { name, path co, q_type, kv_type, gqa, mtp, msk, hp, block_size, ps }         \\
     }
 
 struct AsmPaConfig
@@ -29,6 +30,7 @@ struct AsmPaConfig
     int msk;
     int hp;
     int block_size;
+    int ps;
 };
 
 using CFG = std::unordered_map<std::string, AsmPaConfig>;
@@ -53,8 +55,8 @@ if __name__ == "__main__":
     for el in glob.glob(f"{this_dir}/*.csv"):
         df = pd.read_csv(el)
         cfg = [
-            f'ADD_CFG("{qType}", "{kvType}",{Gqa:>4}, {Mtp:>2}, {Msk:>2}, {Hp:>2}, {blkSz:>2}, "pa/", "{Name}", "{Co}"),'
-            for qType, kvType, Gqa, Mtp, Msk, Hp, blkSz, Name, Co in df.values
+            f'ADD_CFG("{qType}", "{kvType}",{Gqa:>4}, {Mtp:>2}, {Msk:>2}, {Hp:>2}, {blkSz:>2}, {ps:>2}, "pa/", "{Name}", "{Co}"),'
+            for qType, kvType, Gqa, Mtp, Msk, Hp, blkSz, ps, Name, Co in df.values
         ]
         filename = os.path.basename(el)
         cfgname = filename.split(".")[0]

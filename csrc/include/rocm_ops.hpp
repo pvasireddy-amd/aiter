@@ -91,6 +91,9 @@ namespace py = pybind11;
           py::arg("V_QScale")       = std::nullopt, \
           py::arg("out_")           = std::nullopt, \
           py::arg("qo_indptr")      = std::nullopt, \
+          py::arg("work_meta_data") = std::nullopt, \
+          py::arg("splitData")      = std::nullopt, \
+          py::arg("splitLse")       = std::nullopt, \
           py::arg("high_precision") = 1,            \
           py::arg("kernelName")     = std::nullopt);
 

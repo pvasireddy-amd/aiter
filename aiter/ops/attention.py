@@ -2,18 +2,19 @@
 # Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 import math
+from typing import Optional, Tuple
+
 import torch
-from typing import Tuple, Optional
-from ..jit.core import (
-    compile_ops,
-)
+
+from aiter import dtypes
 from csrc.cpp_itfs.pa.pa import paged_attention_rocm as paged_attention_rocm_core
-from csrc.cpp_itfs.pa.pa_v1 import paged_attention_v1 as paged_attention_v1_core
 from csrc.cpp_itfs.pa.pa_ragged import (
     paged_attention_ragged as paged_attention_ragged_core,
 )
+from csrc.cpp_itfs.pa.pa_v1 import paged_attention_v1 as paged_attention_v1_core
 from csrc.cpp_itfs.torch_utils import direct_register_custom_op
-from aiter import dtypes
+
+from ..jit.core import compile_ops
 
 MD_NAME = "module_attention"
 
@@ -107,6 +108,9 @@ def pa_fwd_asm(
     V_QScale: Optional[torch.Tensor] = None,
     out_: Optional[torch.Tensor] = None,
     qo_indptr: Optional[torch.Tensor] = None,
+    work_meta_data: Optional[torch.Tensor] = None,
+    splitData: Optional[torch.Tensor] = None,
+    splitLse: Optional[torch.Tensor] = None,
     high_precision: Optional[
         int
     ] = 1,  # [0, 1, 2] 2 is the highest precision, this is only for fp8 kvcache
