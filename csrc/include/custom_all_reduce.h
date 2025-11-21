@@ -33,6 +33,10 @@ void all_reduce(fptr_t _fa,
                 torch::Tensor& out,
                 bool open_fp8_quant,
                 std::optional<torch::Tensor> reg_buffer);
+void reduce_scatter(fptr_t _fa,
+                torch::Tensor& inp,
+                torch::Tensor& out,
+                std::optional<torch::Tensor> reg_buffer);
 void all_gather_reg(fptr_t _fa, torch::Tensor& inp, torch::Tensor& out);
 void all_gather_unreg(fptr_t _fa,
                       torch::Tensor& inp,
