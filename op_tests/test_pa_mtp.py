@@ -503,6 +503,10 @@ def test_pa_mtp(
             reduce_indptr,
             reduce_final_map,
             reduce_partial_map,
+            kv_granularity=max(block_size, 16),
+            max_seqlen_qo=int(max_qlen),
+            uni_seqlen_qo=max_qlen,
+            max_split_per_batch=-1,
         )
         num_kv_splits = 1
         splitLse = torch.empty(
