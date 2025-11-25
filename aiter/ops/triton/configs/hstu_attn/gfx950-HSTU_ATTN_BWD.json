@@ -10,7 +10,6 @@
     "SEQUENCE_PARALLEL": true,
     "UNROLL": 1
   },
-
   "large_batch": {
     "BLOCK_M": 32,
     "BLOCK_N": 64,

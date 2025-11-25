@@ -1,6 +1,6 @@
 {
   "N16": {
-    "small" :{
+    "small": {
       "BLOCK_M": 16,
       "BLOCK_K": 256,
       "num_warps": 4,
@@ -8,7 +8,7 @@
       "waves_per_eu": 3,
       "kpack": 1
     },
-    "medium" :{
+    "medium": {
       "BLOCK_M": 16,
       "BLOCK_K": 256,
       "num_warps": 4,
@@ -16,25 +16,25 @@
       "waves_per_eu": 3,
       "kpack": 1
     },
-    "large" :{
+    "large": {
       "BLOCK_M": 16,
       "BLOCK_K": 256,
       "num_warps": 4,
       "num_stages": 2,
       "waves_per_eu": 3,
-      "kpack": 1
+      "kpack": 2
     },
-    "xlarge" :{
+    "xlarge": {
       "BLOCK_M": 32,
       "BLOCK_K": 128,
       "num_warps": 8,
       "num_stages": 2,
       "waves_per_eu": 2,
-      "kpack": 1
+      "kpack": 2
     }
   },
   "N128": {
-    "small" :{
+    "small": {
       "BLOCK_M": 16,
       "BLOCK_K": 256,
       "num_warps": 8,
@@ -42,29 +42,29 @@
       "waves_per_eu": 0,
       "kpack": 1
     },
-    "medium" :{
+    "medium": {
       "BLOCK_M": 16,
       "BLOCK_K": 256,
       "num_warps": 8,
       "num_stages": 1,
       "waves_per_eu": 0,
-      "kpack": 1
+      "kpack": 2
     },
-    "large" :{
+    "large": {
       "BLOCK_M": 16,
       "BLOCK_K": 256,
       "num_warps": 8,
       "num_stages": 1,
       "waves_per_eu": 2,
-      "kpack": 1
+      "kpack": 2
     },
-    "xlarge" :{
+    "xlarge": {
       "BLOCK_M": 32,
       "BLOCK_K": 128,
       "num_warps": 8,
       "num_stages": 2,
       "waves_per_eu": 2,
-      "kpack": 1
+      "kpack": 2
     }
   }
 }

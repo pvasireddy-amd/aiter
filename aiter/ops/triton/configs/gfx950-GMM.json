@@ -7,8 +7,7 @@
       "GROUP_SIZE": 1,
       "GRID_DIM": 256,
       "num_warps": 8,
-      "num_stages": 1,
-      "kpack": 1
+      "num_stages": 1
     }
   },
   "ptgmm": {
@@ -19,8 +18,7 @@
       "GROUP_SIZE": 1,
       "GRID_DIM": 256,
       "num_warps": 8,
-      "num_stages": 1,
-      "kpack": 1
+      "num_stages": 1
     }
   },
   "nptgmm": {
@@ -30,8 +28,7 @@
       "BLOCK_SIZE_N": 256,
       "GROUP_SIZE": 1,
       "num_warps": 8,
-      "num_stages": 1,
-      "kpack": 1
+      "num_stages": 1
     }
   }
 }

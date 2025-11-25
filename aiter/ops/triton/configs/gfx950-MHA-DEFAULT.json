@@ -7,8 +7,7 @@
       "waves_per_eu": 1,
       "num_warps": 2,
       "num_ctas": 1,
-      "num_stages": 1,
-      "kpack": 1
+      "num_stages": 1
     },
     "default": {
       "BLOCK_M": 128,
@@ -17,8 +16,7 @@
       "waves_per_eu": 2,
       "num_warps": 4,
       "num_ctas": 1,
-      "num_stages": 1,
-      "kpack": 1
+      "num_stages": 1
     },
     "pe": {
       "BLOCK_M": 256,
@@ -27,8 +25,7 @@
       "waves_per_eu": 2,
       "num_warps": 8,
       "num_ctas": 1,
-      "num_stages": 5,
-      "kpack": 1
+      "num_stages": 5
     },
     "pe_dropout_or_fp32": {
       "BLOCK_M": 256,
@@ -37,8 +34,7 @@
       "waves_per_eu": 2,
       "num_warps": 8,
       "num_ctas": 1,
-      "num_stages": 1,
-      "kpack": 1
+      "num_stages": 1
     }
   },
   "bkwd_fused": {
@@ -52,8 +48,7 @@
       "num_stages": 1,
       "waves_per_eu": 2,
       "BLK_SLICE_FACTOR": 1,
-      "matrix_instr_nonkdim": 16,
-      "kpack": 1
+      "matrix_instr_nonkdim": 16
     },
     "dkdvdq_kernel_N128": {
       "BLOCK_M": 16,
@@ -62,8 +57,7 @@
       "num_stages": 1,
       "waves_per_eu": 2,
       "BLK_SLICE_FACTOR": 1,
-      "matrix_instr_nonkdim": 16,
-      "kpack": 1
+      "matrix_instr_nonkdim": 16
     }
   },
   "bkwd_onekernel": {
@@ -80,8 +74,7 @@
       "matrix_instr_nonkdim": 16,
       "num_warps": 4,
       "num_ctas": 1,
-      "num_stages": 1,
-      "kpack": 1
+      "num_stages": 1
     }
   }
 }
