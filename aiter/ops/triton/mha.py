@@ -272,7 +272,9 @@ class _FlashAttnFunc(torch.autograd.Function):
         is_grad_enabled,
         config=None,
     ):
-        is_grad = is_grad_enabled and any(x.requires_grad for x in [q, k, v])
+        is_grad = is_grad_enabled and any(
+            x is not None and x.requires_grad for x in [q, k, v, sink]
+        )
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
         head_size_og = q.size(3)
@@ -302,7 +304,7 @@ class _FlashAttnFunc(torch.autograd.Function):
         )
 
         if is_grad:
-            ctx.save_for_backward(q, k, v, out_padded, softmax_lse)
+            ctx.save_for_backward(q, k, v, out_padded, softmax_lse, sink)
             ctx.philox_seed = philox_seed
             ctx.philox_offset = philox_offset
             ctx.dropout_p = dropout_p
@@ -324,10 +326,12 @@ class _FlashAttnFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do, *args):
-        q, k, v, out, softmax_lse = ctx.saved_tensors
+        q, k, v, out, softmax_lse, sink = ctx.saved_tensors
         bias = ctx.bias
         dbias = torch.empty_like(bias) if bias is not None else None
         dq, dk, dv = torch.zeros_like(q), torch.empty_like(k), torch.empty_like(v)
+        # TODO: Find out if `dsink` should be initialized with `zeros_like` or `empty_like`.
+        dsink = torch.zeros_like(sink) if sink is not None else None
         head_size_v_og = do.size(3)
         do_padded = do
         if head_size_v_og % 8 != 0:
@@ -389,17 +393,18 @@ class _FlashAttnFunc(torch.autograd.Function):
             dq,
             dk,
             dv,
-            None,
-            None,
-            None,
-            None,
+            None,  # dropout_p
+            None,  # softmax_scale
+            None,  # causal
+            None,  # window_size
             dbias,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # alibi_slopes
+            None,  # deterministic
+            None,  # return_lse
+            None,  # return_softmax
+            dsink,
+            None,  # is_grad_enabled
+            None,  # config
         )
 
 
@@ -517,7 +522,9 @@ class _FlashAttnVarlenFunc(torch.autograd.Function):
         is_grad_enabled,
         config=None,
     ):
-        is_grad = is_grad_enabled and any(x.requires_grad for x in [q, k, v])
+        is_grad = is_grad_enabled and any(
+            x is not None and x.requires_grad for x in [q, k, v, sink]
+        )
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
         head_size_og = q.size(2)
@@ -549,7 +556,7 @@ class _FlashAttnVarlenFunc(torch.autograd.Function):
         )
         if is_grad:
             ctx.save_for_backward(
-                q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k
+                q, k, v, out_padded, softmax_lse, cu_seqlens_q, cu_seqlens_k, sink
             )
             ctx.max_seqlen_q = max_seqlen_q
             ctx.max_seqlen_k = max_seqlen_k
@@ -573,10 +580,12 @@ class _FlashAttnVarlenFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, do, *args):
-        q, k, v, out, softmax_lse, cu_seqlens_q, cu_seqlens_k = ctx.saved_tensors
+        q, k, v, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, sink = ctx.saved_tensors
         dq, dk, dv = torch.zeros_like(q), torch.empty_like(k), torch.empty_like(v)
         bias = ctx.bias
         dbias = torch.empty_like(bias) if bias is not None else None
+        # TODO: Find out if `dsink` should be initialized with `zeros_like` or `empty_like`.
+        dsink = torch.zeros_like(sink) if sink is not None else None
         head_size_og = do.size(2)
         do_padded = do
         if head_size_og % 8 != 0:
@@ -638,24 +647,24 @@ class _FlashAttnVarlenFunc(torch.autograd.Function):
             dq,
             dk,
             dv,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # cu_seqlens_q,
+            None,  # cu_seqlens_k
+            None,  # max_seqlen_q
+            None,  # max_seqlen_k
+            None,  # dropout_p
+            None,  # softmax_scale
+            None,  # causal
+            None,  # window_size
             dbias,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            None,  # alibi_slopes
+            None,  # deterministic
+            None,  # return_lse
+            None,  # return_softmax
+            None,  # block_table
+            None,  # out
+            dsink,
+            None,  # is_grad_enabled
+            None,  # config
         )
 
 
