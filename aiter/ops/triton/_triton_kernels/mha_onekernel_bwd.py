@@ -523,11 +523,13 @@ def bwd_kernel_causal(  # grid = (tl.cdiv(max_seqlen_q // BLOCK_M2), batch, nhea
     Q,
     K,
     V,
+    Sink,
     sm_scale,
     DO,
     DQ,
     DK,
     DV,
+    DSink,
     M,
     Delta,
     stride_qb_in,
@@ -603,6 +605,7 @@ def bwd_kernel_causal(  # grid = (tl.cdiv(max_seqlen_q // BLOCK_M2), batch, nhea
     DEBUG_TRITON: tl.constexpr,
     DEBUG_TRITON_DETAIL: tl.constexpr,
     USE_INT64_STRIDES: tl.constexpr,
+    ENABLE_SINK: tl.constexpr,
 ):
     if USE_INT64_STRIDES:
         stride_qb = tl.cast(stride_qb_in, tl.int64)
@@ -1217,11 +1220,13 @@ def bwd_kernel_noncausal(
     Q,
     K,
     V,
+    Sink,
     sm_scale,
     DO,
     DQ,
     DK,
     DV,
+    DSink,
     M,
     Delta,
     stride_qb_in,
@@ -1297,6 +1302,7 @@ def bwd_kernel_noncausal(
     DEBUG_TRITON: tl.constexpr,
     DEBUG_TRITON_DETAIL: tl.constexpr,
     USE_INT64_STRIDES: tl.constexpr,
+    ENABLE_SINK: tl.constexpr,
 ):
     if USE_INT64_STRIDES:
         stride_qb = tl.cast(stride_qb_in, tl.int64)

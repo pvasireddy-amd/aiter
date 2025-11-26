@@ -330,7 +330,6 @@ class _FlashAttnFunc(torch.autograd.Function):
         bias = ctx.bias
         dbias = torch.empty_like(bias) if bias is not None else None
         dq, dk, dv = torch.zeros_like(q), torch.empty_like(k), torch.empty_like(v)
-        # TODO: Find out if `dsink` should be initialized with `zeros_like` or `empty_like`.
         dsink = torch.zeros_like(sink) if sink is not None else None
         head_size_v_og = do.size(3)
         do_padded = do
@@ -338,6 +337,9 @@ class _FlashAttnFunc(torch.autograd.Function):
             do_padded = torch.nn.functional.pad(do, [0, 8 - head_size_v_og % 8])
 
         if _USE_FUSED_BWD_KERNEL:
+            assert (
+                sink is None and dsink is None
+            ), "Fused backward doesn't support sinks."
             flash_attn_fused_backward(
                 do_padded,
                 q,
@@ -384,6 +386,8 @@ class _FlashAttnFunc(torch.autograd.Function):
                 philox_seed=ctx.philox_seed,
                 philox_offset=ctx.philox_offset,
                 USE_INT64_STRIDES=_USE_INT64_STRIDES,
+                sink=sink,
+                dsink=dsink,
             )
 
         dq = dq[..., : q.shape[-1]]  # We could have padded the head dimension
@@ -584,7 +588,6 @@ class _FlashAttnVarlenFunc(torch.autograd.Function):
         dq, dk, dv = torch.zeros_like(q), torch.empty_like(k), torch.empty_like(v)
         bias = ctx.bias
         dbias = torch.empty_like(bias) if bias is not None else None
-        # TODO: Find out if `dsink` should be initialized with `zeros_like` or `empty_like`.
         dsink = torch.zeros_like(sink) if sink is not None else None
         head_size_og = do.size(2)
         do_padded = do
@@ -592,6 +595,9 @@ class _FlashAttnVarlenFunc(torch.autograd.Function):
             do_padded = torch.nn.functional.pad(do, [0, 8 - head_size_og % 8])
 
         if _USE_FUSED_BWD_KERNEL:
+            assert (
+                sink is None and dsink is None
+            ), "Fused backward doesn't support sinks."
             flash_attn_fused_backward(
                 do_padded,
                 q,
@@ -638,6 +644,8 @@ class _FlashAttnVarlenFunc(torch.autograd.Function):
                 philox_seed=ctx.philox_seed,
                 philox_offset=ctx.philox_offset,
                 USE_INT64_STRIDES=_USE_INT64_STRIDES,
+                sink=sink,
+                dsink=dsink,
             )
 
         dq = dq[..., : q.shape[-1]]  # We could have padded the head dimension
