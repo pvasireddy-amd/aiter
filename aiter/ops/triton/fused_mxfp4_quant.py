@@ -17,6 +17,7 @@ def fused_rms_mxfp4_quant(
     x1: torch.Tensor,
     x1_weight: torch.Tensor,
     x1_epsilon: float,
+    use_global_scale: Optional[bool] = False,
     x2: Optional[torch.Tensor] = None,
     x2_weight: Optional[torch.Tensor] = None,
     x2_epsilon: float = 0.0,
@@ -91,12 +92,15 @@ def fused_rms_mxfp4_quant(
         x2_stride_m = x2.stride(0)
         out2_stride_m = out2.stride(0)
 
+    global_scale = torch.zeros(1, dtype=torch.float32, device=x1.device)
+
     grid = (triton.cdiv(M, BLOCK_SIZE_M) * (2 if (x2 is not None) else 1),)
     _fused_rms_mxfp4_quant_kernel[grid](
         x1,
         x1_weight,
         x2,
         x2_weight,
+        global_scale,
         res1,
         out1_fp4,
         out1_bs,
@@ -125,9 +129,10 @@ def fused_rms_mxfp4_quant(
         SCALE_N_PAD=SCALE_N,
         SHUFFLE=shuffle,
         SHUFFLE_PAD=use_scale_shuffle_padding,
+        use_global_scale=use_global_scale,
     )
 
-    return (out1_fp4, out1_bs), out2, out_res1
+    return (out1_fp4, out1_bs, global_scale), out2, out_res1
 
 
 def fused_flatten_mxfp4_quant(
