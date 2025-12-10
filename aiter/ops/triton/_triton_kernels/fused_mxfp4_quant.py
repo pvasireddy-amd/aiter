@@ -28,6 +28,7 @@ def _fused_rms_mxfp4_quant_kernel(
     w1_ptr,
     x2_ptr,
     w2_ptr,
+    global_scale_ptr,
     res1_ptr,
     out1_fp4_ptr,
     out1_bs_ptr,
@@ -59,6 +60,7 @@ def _fused_rms_mxfp4_quant_kernel(
     SHUFFLE_PAD: tl.constexpr,
     EVEN_M_N: tl.constexpr,
     EVEN_M_N2: tl.constexpr,
+    use_global_scale: tl.constexpr,
 ):
     # TODO: XCD remapping where every 32-token block should share the same XCD
     # TODO: debug for large M
@@ -139,8 +141,12 @@ def _fused_rms_mxfp4_quant_kernel(
     w1 = tl.load(w1_ptr + x_offs_n, mask=w_mask1, other=w_other1).to(tl.float32)
 
     norm1 = _rmsmorm_op(x1, w1, N1, eps1)
+    # Load global scale if use_global_scale is enabled
+    global_scale = None
+    if use_global_scale:
+        global_scale = tl.load(global_scale_ptr)
     out1_fp4, bs_e8m0 = _mxfp4_quant_op(
-        norm1, BLOCK_SIZE_N, BLOCK_SIZE_M, MXFP4_QUANT_BLOCK_SIZE
+        norm1, BLOCK_SIZE_N, BLOCK_SIZE_M, MXFP4_QUANT_BLOCK_SIZE, global_scale
     )
 
     # store the results
