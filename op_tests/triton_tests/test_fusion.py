@@ -252,7 +252,7 @@ def test_fp4_block_size_sweep():
     # Generate test data once
     x = torch.randn((M, K), dtype=dtype)
     w = torch.randn((N, K), dtype=dtype)
-    x_fp4, x_scales, global_x = dynamic_mxfp4_quant(x, True)
+    # x_fp4, x_scales, global_x = dynamic_mxfp4_quant(x, True)
     w_fp4, w_scales, global_w = dynamic_mxfp4_quant(w, True)
     out = torch.empty((M, N), dtype=dtype)
 
@@ -283,10 +283,16 @@ def test_fp4_block_size_sweep():
                 try:
                     
                     def run_kernel():
-                        (x_fp4, x_scales), _, _ = fused_rms_mxfp4_quant(
+                        # (x_fp4, x_scales), _, _ = fused_rms_mxfp4_quant(
+                        #     x,
+                        #     weight,
+                        #     eps,
+                        # )
+                        (x_fp4, x_scales, global_x), _, _ = fused_rms_mxfp4_quant(
                             x,
                             weight,
                             eps,
+                            True,
                         )
                         tritonblas.matmul_fp4(
                             x_fp4, w_fp4, out, x_scales, w_scales,
