@@ -14,6 +14,76 @@ def _rmsmorm_op(row, weight, n_cols, epsilon):
     return rms_norm
 
 
+@triton.jit
+def _fused_rms_mxfp4_find_global_max_kernel(
+    x1_ptr,
+    w1_ptr,
+    res1_ptr,
+    global_max_ptr,
+    eps1,
+    M,
+    N1,
+    x1_stride_m,
+    res1_stride_m,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    FIRST_INPUT_RES: tl.constexpr,
+):
+    """
+    First pass: Find the global maximum absolute value after RMS normalization.
+    Each block:
+    1. Loads its tile of data
+    2. Applies residual connection if needed
+    3. Applies RMS normalization
+    4. Computes the maximum absolute value within the normalized tile
+    5. Performs ONE atomic write to contribute to the global maximum
+    """
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    
+    # Cast strides to int64
+    x1_stride_m = tl.cast(x1_stride_m, tl.int64)
+    
+    # Compute offsets
+    x_offs_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    x_offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    
+    # Create masks
+    mask1 = (x_offs_m < M)[:, None] & (x_offs_n < N1)[None, :]
+    
+    # Load x1
+    x1 = tl.load(
+        x1_ptr + x_offs_m[:, None] * x1_stride_m + x_offs_n[None, :],
+        mask=mask1,
+        other=0.0,
+        cache_modifier=".cg",
+    ).to(tl.float32)
+    
+    # Add residual if needed
+    if FIRST_INPUT_RES:
+        res1 = tl.load(
+            res1_ptr + x_offs_m[:, None] * res1_stride_m + x_offs_n[None, :],
+            mask=mask1,
+            other=0.0,
+            cache_modifier=".cg",
+        ).to(tl.float32)
+        x1 = x1 + res1
+    
+    # Load weights
+    w_mask1 = x_offs_n < N1
+    w1 = tl.load(w1_ptr + x_offs_n, mask=w_mask1, other=0.0).to(tl.float32)
+    
+    # Apply RMS normalization
+    norm1 = _rmsmorm_op(x1, w1, N1, eps1)
+    
+    # Find the maximum absolute value across the entire block
+    local_max = tl.max(tl.abs(norm1))
+    
+    # Only ONE atomic write per block to global memory
+    # Scale by 1/6 for mxfp4 range
+    tl.atomic_max(global_max_ptr, local_max / 6.0, sem="relaxed")
+
+
 @triton.heuristics(
     {
         "EVEN_M_N": lambda args: args["M"] % args["BLOCK_SIZE_M"] == 0
