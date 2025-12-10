@@ -5,6 +5,7 @@ from typing import Optional
 
 from aiter.ops.triton._triton_kernels.fused_mxfp4_quant import (
     _rmsmorm_op,
+    _fused_rms_mxfp4_find_global_max_kernel,
     _fused_rms_mxfp4_quant_kernel,
     _fused_flatten_mxfp4_quant,
 )
@@ -94,6 +95,29 @@ def fused_rms_mxfp4_quant(
 
     global_scale = torch.zeros(1, dtype=torch.float32, device=x1.device)
 
+    if use_global_scale:
+        # Pass 1: Find global maximum after RMS normalization
+        grid_pass1 = (
+            triton.cdiv(M, BLOCK_SIZE_M),
+            triton.cdiv(N1, BLOCK_SIZE_N),
+        )
+        
+        _fused_rms_mxfp4_find_global_max_kernel[grid_pass1](
+            x1_ptr=x1,
+            w1_ptr=x1_weight,
+            res1_ptr=res1,
+            global_max_ptr=global_scale,
+            eps1=x1_epsilon,
+            M=M,
+            N1=N1,
+            x1_stride_m=x1.stride(0),
+            res1_stride_m=res1_stride_m,
+            BLOCK_SIZE_M=BLOCK_SIZE_M,
+            BLOCK_SIZE_N=BLOCK_SIZE_N,
+            FIRST_INPUT_RES=(res1 is not None),
+        )
+
+    # Pass 2: Quantize with the computed global scale (or without if use_global_scale=False)
     grid = (triton.cdiv(M, BLOCK_SIZE_M) * (2 if (x2 is not None) else 1),)
     _fused_rms_mxfp4_quant_kernel[grid](
         x1,
