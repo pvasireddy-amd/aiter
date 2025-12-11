@@ -24,11 +24,9 @@ _LOGGER = AiterTritonLogger()
 global _USE_GEMM_SPLITK_BF16
 _USE_GEMM_SPLITK_BF16 = False
 
-
 def set_use_gemm_splitk_bf16(value: bool):
     global _USE_GEMM_SPLITK_BF16
     _USE_GEMM_SPLITK_BF16 = value
-
 
 def get_splitk(K: int, BLOCK_SIZE_K: int, NUM_KSPLIT: int):
     # heuristics for make "EVEN_K == True" as much as possible
@@ -62,7 +60,6 @@ def get_splitk(K: int, BLOCK_SIZE_K: int, NUM_KSPLIT: int):
 
     return SPLITK_BLOCK_SIZE, BLOCK_SIZE_K, NUM_KSPLIT
 
-
 def gemm_afp4wfp4(
     x,
     w,
@@ -71,6 +68,8 @@ def gemm_afp4wfp4(
     dtype: Optional[float] = torch.bfloat16,
     y: Optional[torch.Tensor] = None,
     config: Optional[dict] = None,
+    global_x: Optional[float] = None,
+    global_w: Optional[float] = None
 ):
     """
     Computes matrix multiplication Y = X @ W^T with FP4 activations and FP4 weights.
@@ -86,6 +85,8 @@ def gemm_afp4wfp4(
         y (Optional[torch.Tensor]): Pre-allocated output tensor with shape (M, N).
         config (Optional[dict]): Kernel tuning parameters (BLOCK_SIZE_M, BLOCK_SIZE_N,
             BLOCK_SIZE_K, GROUP_SIZE_M, NUM_KSPLIT, SPLITK_BLOCK_SIZE).
+        global_x (Optional[float]): Macro float scale of input tensor
+        global_w (Optional[float]): Macro float scale of weight tensor
 
     Returns:
         torch.Tensor: Output with shape (M, N).
@@ -159,6 +160,8 @@ def gemm_afp4wfp4(
         w_scales.stride(0),
         w_scales.stride(1),
         **config,
+        global_x=global_x,
+        global_w=global_w,
     )
 
     if config["NUM_KSPLIT"] > 1:
@@ -187,10 +190,11 @@ def gemm_afp4wfp4(
             REDUCE_BLOCK_SIZE_N,
             ACTUAL_KSPLIT,
             config["NUM_KSPLIT"],
+            global_x,
+            global_w,
         )
 
     return y
-
 
 def gemm_afp4wfp4_preshuffled_scales(
     x,
@@ -200,6 +204,8 @@ def gemm_afp4wfp4_preshuffled_scales(
     dtype: Optional[float] = torch.bfloat16,
     y: Optional[torch.Tensor] = None,
     config: Optional[dict] = None,
+    global_x: Optional[float] = None,
+    global_w: Optional[float] = None,
 ):
     """
     Computes matrix multiplication Y = X @ W^T with FP4 activations and FP4 weights using preshuffled scales.
@@ -293,6 +299,8 @@ def gemm_afp4wfp4_preshuffled_scales(
         w_scales.stride(0),
         w_scales.stride(1),
         **config,
+        global_x=global_x,
+        global_w=global_w,
     )
 
     if config["NUM_KSPLIT"] > 1:
@@ -321,10 +329,11 @@ def gemm_afp4wfp4_preshuffled_scales(
             REDUCE_BLOCK_SIZE_N,
             ACTUAL_KSPLIT,
             triton.next_power_of_2(config["NUM_KSPLIT"]),
+            global_x,
+            global_w,
         )
 
     return y
-
 
 def gemm_afp4wfp4_preshuffled_weight_scales(
     x,
@@ -335,6 +344,8 @@ def gemm_afp4wfp4_preshuffled_weight_scales(
     y: Optional[torch.Tensor] = None,
     config: Optional[dict] = None,
     use_aot: Optional[bool] = True,
+    global_x: Optional[float] = None,
+    global_w: Optional[float] = None,
 ):
     """
     Computes matrix multiplication Y = X @ W^T with FP4 activations and FP4 weights using preshuffled weight scales.
@@ -444,6 +455,8 @@ def gemm_afp4wfp4_preshuffled_weight_scales(
                 w_scales.stride(0),
                 w_scales.stride(1),
                 **config,
+                global_x=global_x,
+                global_w=global_w,
             )
     else:
         _gemm_afp4_wfp4_kernel_preshuffled_weight_scales[grid](
@@ -467,6 +480,8 @@ def gemm_afp4wfp4_preshuffled_weight_scales(
             w_scales.stride(0),
             w_scales.stride(1),
             **config,
+            global_x=global_x,
+            global_w=global_w,
         )
 
     if config["NUM_KSPLIT"] > 1:
@@ -495,6 +510,8 @@ def gemm_afp4wfp4_preshuffled_weight_scales(
             REDUCE_BLOCK_SIZE_N,
             ACTUAL_KSPLIT,
             triton.next_power_of_2(config["NUM_KSPLIT"]),
+            global_x,
+            global_w,
         )
 
     return y
