@@ -105,6 +105,9 @@ def _gemm_afp4_wfp4_kernel(
     SPLITK_BLOCK_SIZE: tl.constexpr,
     EVEN_K: tl.constexpr,
     cache_modifier: tl.constexpr,
+    #Global scales
+    global_x,
+    global_w,
 ):
     """
     Kernel for computing the matmul C = A x B.
@@ -210,7 +213,11 @@ def _gemm_afp4_wfp4_kernel(
             b_scale_ptrs += (BLOCK_SIZE_K // SCALE_GROUP_SIZE) * stride_bsk
 
         c = accumulator.to(c_ptr.type.element_ty)
-
+        if NUM_KSPLIT == 1 and global_x is not None and global_w is not None:
+            global_x_val = tl.load(global_x)
+            global_w_val = tl.load(global_w) 
+            c = c * global_x_val * global_w_val
+            
         # Write back the block of the output matrix C with masks.
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
         offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
@@ -261,6 +268,9 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales(
     SPLITK_BLOCK_SIZE: tl.constexpr,
     EVEN_K: tl.constexpr,
     cache_modifier: tl.constexpr,
+    # Global scales
+    global_x,
+    global_w,
 ):
     """
     Kernel for computing the matmul C = A x B.
@@ -415,6 +425,10 @@ def _gemm_afp4_wfp4_kernel_preshuffled_scales(
             b_scale_ptrs += BLOCK_SIZE_K * stride_bsk
 
         c = accumulator.to(c_ptr.type.element_ty)
+        if NUM_KSPLIT == 1 and global_x is not None and global_w is not None:
+            global_x_val = tl.load(global_x)
+            global_w_val = tl.load(global_w) 
+            c = c * global_x_val * global_w_val
 
         # Write back the block of the output matrix C with masks.
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
@@ -466,6 +480,9 @@ def _gemm_afp4_wfp4_kernel_preshuffled_weight_scales(
     SPLITK_BLOCK_SIZE: tl.constexpr,
     EVEN_K: tl.constexpr,
     cache_modifier: tl.constexpr,
+    # Global scales
+    global_x,
+    global_w,
 ):
     """
     Kernel for computing the matmul C = A x B.
@@ -619,7 +636,7 @@ def _gemm_afp4_wfp4_kernel_preshuffled_weight_scales(
                 .trans(1, 0)
             )
 
-            accumulator += tl.dot_scaled(a, a_scales, "e2m1", b, b_scales, "e2m1")
+            accumulator = tl.dot_scaled(a, a_scales, "e2m1", b, b_scales, "e2m1", accumulator)
 
             # Advance the ptrs to the next K block.
             a_ptrs += (BLOCK_SIZE_K // 2) * stride_ak
@@ -631,6 +648,10 @@ def _gemm_afp4_wfp4_kernel_preshuffled_weight_scales(
             b_scale_ptrs += BLOCK_SIZE_K * stride_bsk
 
         c = accumulator.to(c_ptr.type.element_ty)
+        if NUM_KSPLIT == 1 and global_x is not None and global_w is not None:
+            global_x_val = tl.load(global_x)
+            global_w_val = tl.load(global_w) 
+            c = c * global_x_val * global_w_val
 
         # Write back the block of the output matrix C with masks.
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
@@ -660,6 +681,9 @@ def _gemm_afp4_wfp4_reduce_kernel(
     BLOCK_SIZE_N: tl.constexpr,
     ACTUAL_KSPLIT: tl.constexpr,
     MAX_KSPLIT: tl.constexpr,
+    # Global scales
+    global_x,
+    global_w,
 ):
 
     pid_m = tl.program_id(axis=0)
@@ -682,6 +706,11 @@ def _gemm_afp4_wfp4_reduce_kernel(
     c = tl.sum(c, axis=0)
 
     c = c.to(c_out_ptr.type.element_ty)
+
+    if global_x is not None and global_w is not None:  # Always apply here since it only runs when NUM_KSPLIT > 1
+        global_x_val = tl.load(global_x)
+        global_w_val = tl.load(global_w) 
+        c = c * global_x_val * global_w_val
 
     c_out_ptrs = (
         c_out_ptr
