@@ -7,6 +7,7 @@ import tritonblas
 import time
 import argparse
 import pytest
+from aiter.ops.triton.gemm_afp4wfp4 import gemm_afp4wfp4
 from tritonblas.utils import dynamic_mxfp4_quant, mxfp4_to_f32, e8m0_to_f32
 from aiter.ops.triton.rmsnorm import rms_norm
 from aiter.ops.triton.fused_mxfp4_quant import fused_rms_mxfp4_quant
@@ -252,7 +253,7 @@ def test_fp4_block_size_sweep():
     # Generate test data once
     x = torch.randn((M, K), dtype=dtype)
     w = torch.randn((N, K), dtype=dtype)
-    # x_fp4, x_scales, global_x = dynamic_mxfp4_quant(x, True)
+    # x_fp4, x_scales, scale_global_x = dynamic_mxfp4_quant(x, True)
     w_fp4, w_scales, global_w = dynamic_mxfp4_quant(w, True)
     out = torch.empty((M, N), dtype=dtype)
 
@@ -299,6 +300,16 @@ def test_fp4_block_size_sweep():
                             block_m=block_m, block_n=block_n, block_k=block_k,
                             global_x=global_x, global_w=global_w
                         )
+                        # Uncomment if you want to use Aiter's GEMM
+                        # config = {
+                        #     "BLOCK_SIZE_M": block_m,
+                        #     "BLOCK_SIZE_K": block_k,
+                        #     "BLOCK_SIZE_N": block_n,
+                        #     "GROUP_SIZE_M": 4,
+                        #     "NUM_KSPLIT": 1,
+                        #     "cache_modifier": "",
+                        # }
+                        # gemm_afp4wfp4(x_fp4, w_fp4, x_scales, w_scales, dtype, out, config=config, global_x=global_x, global_w=global_w)
                     
                     us = benchmark_kernel(run_kernel, num_iters=5, warmup=2)
                     total_ops = 2 * M * N * K
