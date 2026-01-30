@@ -6,7 +6,7 @@ import numpy as np
 import argparse
 
 # Import the CPU implementation for comparison
-from final import ref_out
+from fp6_cpu import ref_out
 
 @triton.jit
 def triton_fp6_pack_32bit_kernel(
