@@ -261,9 +261,13 @@ def triton_dequant_and_pack_kernel(
     mantissa = bf16_int & 0x7F
     
     # Convert to FP6 format
-    fp6_exponent = tl.where((exponent == 0) | (exponent == 124) | (exponent == 125), 0, exponent - 126)
-    fp6_mantissa = mantissa >> 4  # Take top 3 bits of mantissa
-    
+    fp6_exponent = tl.where((exponent < 127), 0, exponent - 126)
+    #fp6_mantissa = mantissa >> 4  # Take top 3 bits of mantissa
+    fp6_mantissa = tl.where((exponent == 0), 0, mantissa >> 4) # Handle zero and normals
+    fp6_mantissa = tl.where((exponent == 124), 1, fp6_mantissa)  # Handle subnormals
+    fp6_mantissa = tl.where((exponent == 125), 2 | (mantissa >> 6), fp6_mantissa)  # Handle subnormals
+    fp6_mantissa = tl.where((exponent == 126), 4 | (mantissa >> 5), fp6_mantissa)  # Handle subnormals
+
     # Pack into FP6 format: [00][sign(1)][exp(2)][mantissa(3)]
     fp6_packed = (sign << 5) | (fp6_exponent << 3) | fp6_mantissa
     
@@ -352,7 +356,7 @@ def triton_fused_pack_kernel(tcast_tensor, packing_mode):
         n_elements, n_scales, group_size,
         BLOCK_SIZE=BLOCK_SIZE, packing_mode=packing_mode
     )
-    
+
     scaled_vals_reshaped = scaled_vals_output.reshape(fp6_tensor.shape)
     
     if packing_mode == 0:
@@ -526,17 +530,27 @@ def triton_fp6_unpack_24bit_kernel(
             fp6_exponent = ((fp6_val >> 3) & 0x3).to(tl.int32)
             fp6_mantissa = (fp6_val & 0x7).to(tl.int32)
             
-            # 1. Convert to FP8 E4M3 format
-            fp8_exponent = fp6_exponent + 6  # Add 6 for E4M3 bias
-            fp8_packed = (sign << 7) | (fp8_exponent << 3) | fp6_mantissa
-            tl.store(fp8_ptr + idx, fp8_packed.to(tl.uint8))
+            # 1. Convert to BF16 format
+            #bf16_exponent = fp6_exponent + 126  # BF16 bias adjustment
+            bf16_exponent = tl.where((fp6_exponent == 0) & (fp6_mantissa == 0), 0, fp6_exponent + 126)
+            bf16_exponent = tl.where((fp6_exponent == 0) & (fp6_mantissa == 1), 124, bf16_exponent)
+            bf16_exponent = tl.where((fp6_exponent == 0) & (fp6_mantissa > 1) & (fp6_mantissa < 4), 125, bf16_exponent)
+            bf16_exponent = tl.where((fp6_exponent == 0) & (fp6_mantissa > 3), 126, bf16_exponent)
+
+            bf16_mantissa = tl.where((fp6_exponent == 0) & (fp6_mantissa == 0), 0, fp6_mantissa << 4)
+            bf16_mantissa = tl.where((fp6_exponent == 0) & (fp6_mantissa == 1), 0, bf16_mantissa)
+            bf16_mantissa = tl.where((fp6_exponent == 0) & (fp6_mantissa > 1) & (fp6_mantissa < 4), (fp6_mantissa & 1) << 6, bf16_mantissa)
+            bf16_mantissa = tl.where((fp6_exponent == 0) & (fp6_mantissa > 3), (fp6_mantissa & 3) << 5, bf16_mantissa)
             
-            # 2. Convert to BF16 format
-            bf16_exponent = fp6_exponent + 126  # BF16 bias adjustment
-            bf16_mantissa = fp6_mantissa << 4   # Extend mantissa to 7 bits
             bf16_packed = (sign << 15) | (bf16_exponent << 7) | bf16_mantissa
             bf16_value = bf16_packed.to(tl.int16).to(tl.bfloat16, bitcast=True)
             tl.store(bf16_ptr + idx, bf16_value)
+
+            # 2. Convert to FP8 E4M3 format
+            fp8_exponent = tl.where((bf16_exponent == 0), 0, bf16_exponent - 120)  # Add 6 for E4M3 bias
+            fp8_mantissa = bf16_mantissa >> 4  # Take top 3 bits of mantissa
+            fp8_packed = (sign << 7) | (fp8_exponent << 3) | fp8_mantissa
+            tl.store(fp8_ptr + idx, fp8_packed.to(tl.uint8))
 
 @triton.jit
 def triton_fp6_unpack_32bit_kernel(
@@ -827,7 +841,7 @@ def triton_fused_unpack_gemm_kernel(packed_tensor, packing_mode, original_shape=
             fp8_output = fp8_output[:original_size]
             bf16_output = bf16_output[:original_size]
             return fp8_output.reshape(original_shape), bf16_output.reshape(original_shape)
-        
+
         return fp8_output, bf16_output
         
     elif packing_mode == 2:
@@ -957,11 +971,20 @@ def main():
         activations = torch.randn(args.M, args.K, dtype=torch.bfloat16, device=device)
         weights = torch.randn(args.K, args.N, dtype=torch.bfloat16, device=device)
         
+        '''
+        weights = torch.tensor([[0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75, 1.875, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.5, 5, 5.5, 6, 6.5, 7, 7.5]], dtype=torch.bfloat16, device=device)
+        bits = weights.view(torch.uint16)
+        for i in range(32):
+            v = bits[0, i].item()
+            print(f"Value: {weights[0,i]:.6f}, Bits: {(v>>15)&1} | {(v>>7)&0xff:08b} | {(v>>4)&0x7:03b} | {(v)&0xf:04b}")
+        '''
+
         tcast_fp6_act = ref_out(activations, device=device, cast_mode=tcast.mxfp6e2)
         tcast_fp6_wt = ref_out(weights, device=device, cast_mode=tcast.mxfp6e2)
         
         # Test all packing modes
-        for mode in [0, 1, 2, 3, 4]:
+        #for mode in [0, 1, 2, 3, 4]:
+        for mode in [1]:
             print(f"\n{'='*60}")
             print(f"Testing Triton packing mode {mode}")
             print(f"{'='*60}")
@@ -971,7 +994,7 @@ def main():
             act_packed, act_scaled = triton_fused_pack_kernel(tcast_fp6_act, mode)
             print(f"  Packed shape: {act_packed.shape}")
             print(f"  Packed dtype: {act_packed.dtype}")
-            
+
             # Pack weights
             print("\nPacking weights...")
             wt_packed, wt_scaled = triton_fused_pack_kernel(tcast_fp6_wt, mode)
@@ -987,7 +1010,7 @@ def main():
             else:
                 act_fp8, act_bf16 = triton_fused_unpack_gemm_kernel(act_packed, mode)
                 wt_fp8, wt_bf16 = triton_fused_unpack_gemm_kernel(wt_packed, mode)
-            
+
             print(f"  Unpacked activations FP8 shape: {act_fp8.shape}, dtype: {act_fp8.dtype}")
             print(f"  Unpacked activations BF16 shape: {act_bf16.shape}, dtype: {act_bf16.dtype}")
             print(f"  Unpacked weights FP8 shape: {wt_fp8.shape}, dtype: {wt_fp8.dtype}")
