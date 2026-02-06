@@ -1001,15 +1001,29 @@ def main():
                 act_fp8, act_bf16 = triton_fused_unpack_gemm_kernel(act_packed, mode)
                 wt_fp8, wt_bf16 = triton_fused_unpack_gemm_kernel(wt_packed, mode)
             
-            from aiter import gemm_a8w8_CK
+            # from aiter import gemm_a8w8_CK
+            # _act_scale = (tcast_fp6_act.scaledata.scale).to(torch.uint8)
+            # _wt_scale = (tcast_fp6_wt.scaledata.scale).to(torch.uint8)
+            # _act_scale = _act_scale.view(torch.float8_e8m0fnu)
+            # _wt_scale = _wt_scale.view(torch.float8_e8m0fnu)
+            # _results8 = gemm_a8w8_CK(act_fp8, wt_fp8, _act_scale, _wt_scale)
+            # _result16 = tcast_fp6_act @ tcast_fp6_wt
+            # _error = torch.norm(_result16 - _results8.to(_result16.dtype)) / torch.norm(_result16)
+            # print(f"  GEMM result error (FP8 vs FP6 matmul): {_error.item():.6f}")
+
+            
+            from aiter.ops.triton.fused_gemm_a8w8_blockscale_a16w16 import (
+                fused_gemm_a8w8_blockscale_a16w16,
+            )
             _act_scale = (tcast_fp6_act.scaledata.scale).to(torch.uint8)
             _wt_scale = (tcast_fp6_wt.scaledata.scale).to(torch.uint8)
             _act_scale = _act_scale.view(torch.float8_e8m0fnu)
             _wt_scale = _wt_scale.view(torch.float8_e8m0fnu)
-            _results8 = gemm_a8w8_CK(act_fp8, wt_fp8, _act_scale, _wt_scale)
-            _result16 = tcast_fp6_act @ tcast_fp6_wt
+            _results8, _result16 = fused_gemm_a8w8_blockscale_a16w16(act_fp8, wt_fp8, _act_scale.to(torch.float32), _wt_scale.to(torch.float32), act_bf16, wt_bf16)
             _error = torch.norm(_result16 - _results8.to(_result16.dtype)) / torch.norm(_result16)
             print(f"  GEMM result error (FP8 vs FP6 matmul): {_error.item():.6f}")
+            print(torch.allclose(_result16, _results8))
+
 
             print(f"  Unpacked activations FP8 shape: {act_fp8.shape}, dtype: {act_fp8.dtype}")
             print(f"  Unpacked activations BF16 shape: {act_bf16.shape}, dtype: {act_bf16.dtype}")
