@@ -1,4 +1,4 @@
-# BF16 to FP6 Conversion Analysis
+# BF16 to FP6 Sub-normal Value Conversion Analysis
 
 ## Value Mappings
 BF16 format: [s|e|m] → FP6 format: [s|e|m]
