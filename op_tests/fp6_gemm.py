@@ -1020,9 +1020,19 @@ def main():
             _act_scale = _act_scale.view(torch.float8_e8m0fnu)
             _wt_scale = _wt_scale.view(torch.float8_e8m0fnu)
             _results8, _result16 = fused_gemm_a8w8_blockscale_a16w16(act_fp8, wt_fp8, _act_scale.to(torch.float32), _wt_scale.to(torch.float32), act_bf16, wt_bf16)
+            
+            torch_result16 = activations @ weights
+
             _error = torch.norm(_result16 - _results8.to(_result16.dtype)) / torch.norm(_result16)
-            print(f"  GEMM result error (FP8 vs FP6 matmul): {_error.item():.6f}")
+            _error2 = torch.norm(torch_result16 - _result16) / torch.norm(torch_result16)
+            _error3 = torch.norm(torch_result16 - _results8.to(torch_result16.dtype)) / torch.norm(torch_result16)
+
+            print(f"  GEMM result error: Triton based (FP8 vs FP16 matmul): {_error.item():.6f}")
             print(torch.allclose(_result16, _results8))
+            print(f"  GEMM result error (Triton FP16 vs Torch FP16 matmul): {_error2.item():.6f}")
+            print(torch.allclose(_result16, torch_result16))
+            print(f"  GEMM result error (Triton FP8 vs Torch FP16 matmul): {_error3.item():.6f}")
+            print(torch.allclose(_results8, torch_result16))
 
 
             print(f"  Unpacked activations FP8 shape: {act_fp8.shape}, dtype: {act_fp8.dtype}")
