@@ -1009,7 +1009,7 @@ def main():
             _wt_scale = (tcast_fp6_wt.scaledata.scale).to(torch.uint8)
             _act_scale = _act_scale.view(torch.float8_e8m0fnu)
             _wt_scale = _wt_scale.view(torch.float8_e8m0fnu)
-            _results8, _result16 = fused_gemm_a8w8_blockscale_a16w16(act_fp8, wt_fp8, _act_scale.to(torch.float32), _wt_scale.to(torch.float32), act_bf16, wt_bf16)
+            _results8, _result16 = fused_gemm_a8w8_blockscale_a16w16(act_fp8, wt_fp8, _act_scale.to(torch.float32), _wt_scale.to(torch.float32), tcast_fp6_act.tensor, tcast_fp6_wt.tensor)
             
             torch_result16 = activations @ weights.T
 
