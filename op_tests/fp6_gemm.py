@@ -1013,9 +1013,18 @@ def main():
             
             torch_result16 = activations @ weights.T
 
+            
+            import tritonblas
+            _blast8 = torch.zeros((act_fp8.shape[0], wt_fp8.shape[0]), device="cuda", dtype=torch.bfloat16)
+            selector = tritonblas.OrigamiMatmulSelector(
+                args.M, args.N, args.K, torch.float8_e4m3fn, torch.float8_e4m3fn, torch.bfloat16, _blast8.device
+            )
+            tritonblas.matmul_a8w8_lt(act_fp8, wt_fp8.T, _act_scale.to(torch.float32), _wt_scale.T.to(torch.float32), _blast8, selector)
+
             _error = torch.norm(_result16 - _results8.to(_result16.dtype)) / torch.norm(_result16)
             _error2 = torch.norm(torch_result16 - _result16) / torch.norm(torch_result16)
             _error3 = torch.norm(torch_result16 - _results8.to(torch_result16.dtype)) / torch.norm(torch_result16)
+            _error4 = torch.norm(torch_result16 - _blast8.to(torch_result16.dtype)) / torch.norm(torch_result16)
 
             print(f"  GEMM result error: Triton based (FP8 vs FP16 matmul): {_error.item():.6f}")
             print(torch.allclose(_result16, _results8))
@@ -1023,6 +1032,8 @@ def main():
             print(torch.allclose(_result16, torch_result16))
             print(f"  GEMM result error (Triton FP8 vs Torch FP16 matmul): {_error3.item():.6f}")
             print(torch.allclose(_results8, torch_result16))
+            print(f"  GEMM result error (TritonBLAS FP8 vs Torch FP16 matmul): {_error3.item():.6f}")
+            print(torch.allclose(_blasts8, torch_result16))
 
             print(f"  Unpacked activations FP8 shape: {act_fp8.shape}, dtype: {act_fp8.dtype}")
             print(f"  Unpacked activations BF16 shape: {act_bf16.shape}, dtype: {act_bf16.dtype}")
